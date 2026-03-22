@@ -99,15 +99,19 @@ def delete_gateway_and_targets(config: Dict[str, Any]):
         response = client.list_gateway_targets(gatewayIdentifier=gateway_id)
         targets = response.get('targets', [])
         
-        for target in targets:
-            target_id = target.get('targetId')
-            target_name = target.get('name', target_id)
-            safe_delete(
-                f"Gateway Target ({target_name})",
-                client.delete_gateway_target,
-                gatewayIdentifier=gateway_id,
-                targetId=target_id
-            )
+        if targets:
+            print(f"{BLUE}Found {len(targets)} target(s) to delete{RESET}")
+            for target in targets:
+                target_id = target.get('targetId')
+                target_name = target.get('name', target_id)
+                safe_delete(
+                    f"Gateway Target ({target_name})",
+                    client.delete_gateway_target,
+                    gatewayIdentifier=gateway_id,
+                    targetId=target_id
+                )
+        else:
+            print(f"{YELLOW}No targets found{RESET}")
     except Exception as e:
         print(f"{YELLOW}Could not list gateway targets: {e}{RESET}")
     
@@ -129,7 +133,7 @@ def delete_memory_resource(config: Dict[str, Any]):
     
     memory_id = config.get('memory_id')
     if memory_id:
-        manager = MemoryManager(region=REGION)
+        manager = MemoryManager(region_name=REGION)
         safe_delete(
             f"Memory Resource ({memory_id})",
             manager.delete_memory,
@@ -211,6 +215,21 @@ def delete_iam_role_and_policy(role_config: Dict[str, Any]):
             )
     except Exception as e:
         print(f"{YELLOW}Could not list attached policies: {e}{RESET}")
+    
+    try:
+        # List and delete all inline policies
+        print(f"{BLUE}Deleting inline policies from role {role_name}...{RESET}")
+        response = client.list_role_policies(RoleName=role_name)
+        
+        for policy_name in response.get('PolicyNames', []):
+            safe_delete(
+                f"Inline policy ({policy_name})",
+                client.delete_role_policy,
+                RoleName=role_name,
+                PolicyName=policy_name
+            )
+    except Exception as e:
+        print(f"{YELLOW}Could not list inline policies: {e}{RESET}")
     
     # Delete custom policy if exists
     if policy_arn:
