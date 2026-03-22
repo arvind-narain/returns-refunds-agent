@@ -51,8 +51,8 @@ def test_complete_return_flow():
         print("\n2. Calculating refund...")
         refund_result = policy.calculate_refund(
             original_price=299.99,
-            item_condition='opened_unused',
-            return_reason='changed_mind'
+            condition='opened_unused',
+            reason='changed_mind'
         )
         print(f"   Original Price: ${refund_result['original_price']:.2f}")
         print(f"   Refund Amount: ${refund_result['refund_amount']:.2f}")
@@ -66,7 +66,7 @@ def test_complete_return_flow():
             order_id="INT-TEST-001",
             original_price=refund_result['original_price'],
             refund_amount=refund_result['refund_amount'],
-            item_condition='opened_unused',
+            condition='opened_unused',
             return_reason='changed_mind',
             policy_version=refund_result['policy_version'],
             actor_id="integration-test",
@@ -156,7 +156,7 @@ def test_multiple_scenarios():
                 order_id=scenario['order_id'],
                 original_price=scenario['price'],
                 refund_amount=refund['refund_amount'],
-                item_condition=scenario['condition'],
+                condition=scenario['condition'],
                 return_reason=scenario['reason'],
                 policy_version=refund['policy_version'],
                 actor_id="integration-test",
