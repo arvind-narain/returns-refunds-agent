@@ -1,0 +1,11 @@
+# Streamlit app requirements
+streamlit
+pyyaml
+
+# Core agent dependencies (from requirements.txt)
+strands-agents
+strands-agents-tools
+bedrock-agentcore
+boto3
+requests
+mcp

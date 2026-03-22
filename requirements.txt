@@ -1,0 +1,15 @@
+# Core agent framework
+strands-agents
+strands-agents-tools
+
+# AgentCore Runtime and integrations
+bedrock-agentcore
+
+# AWS SDK
+boto3
+
+# HTTP client for gateway communication
+requests
+
+# MCP protocol support (included with strands-agents but explicit for clarity)
+mcp
