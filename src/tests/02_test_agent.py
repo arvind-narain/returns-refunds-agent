@@ -10,10 +10,10 @@ import importlib.util
 # Set environment variable for Knowledge Base
 os.environ["KNOWLEDGE_BASE_ID"] = "WJOU9NWICK"
 
-# Import run_agent from 01_returns_refunds_agent.py using importlib
+# Import run_agent from src/agents/01_returns_refunds_agent.py using importlib
 def import_run_agent():
-    """Import run_agent function from 01_returns_refunds_agent.py"""
-    spec = importlib.util.spec_from_file_location("returns_refunds_agent", "01_returns_refunds_agent.py")
+    """Import run_agent function from src/agents/01_returns_refunds_agent.py"""
+    spec = importlib.util.spec_from_file_location("returns_refunds_agent", "src/agents/01_returns_refunds_agent.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules["returns_refunds_agent"] = module
     spec.loader.exec_module(module)
@@ -59,7 +59,7 @@ def run_tests():
     # Import the run_agent function
     try:
         run_agent = import_run_agent()
-        print("✓ Successfully imported run_agent from 01_returns_refunds_agent.py\n")
+        print("✓ Successfully imported run_agent from src/agents/01_returns_refunds_agent.py\n")
     except Exception as e:
         print(f"✗ Failed to import run_agent: {e}")
         return
