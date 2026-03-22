@@ -14,6 +14,8 @@ from strands.models import BedrockModel
 from strands_tools import retrieve
 from strands_tools import current_time
 from datetime import datetime
+from src.agents.policy_engine import get_policy_engine
+from src.agents.decision_logger import get_decision_logger
 
 # Constants
 MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -34,58 +36,50 @@ print(f"✓ Knowledge Base ID: {kb_id}")
 # System prompt
 system_prompt = f"""You are a helpful returns and refunds assistant. Help customers check return eligibility, calculate refunds, and understand policies. Use the retrieve tool to access Amazon return policy documents for accurate information. Be friendly and accurate.
 
-When using the retrieve tool, always pass these parameters:
+You are using a configurable policy system. Use get_policy_info() to see the current policy version.
+
+When using the retrieve tool for knowledge base queries, always pass these parameters:
 - knowledgeBaseId: {kb_id}
 - region: {REGION}
 - text: the search query"""
 
+# Initialize policy engine (lazy loaded)
+def _get_policy():
+    """Get policy engine instance"""
+    return get_policy_engine()
+
 # Custom tool definitions
 @tool
 def check_return_eligibility(purchase_date: str, item_category: str, order_id: str) -> dict:
+    """
+    Check if an item is eligible for return based on purchase date and category.
+    Uses configurable policy from YAML/JSON file.
+    """
     try:
-        purchase_dt = datetime.strptime(purchase_date, '%Y-%m-%d')
-        days_since_purchase = (datetime.now() - purchase_dt).days
+        policy = _get_policy()
+        result = policy.check_eligibility(purchase_date, item_category)
         
-        # Define return windows by category
-        return_windows = {
-            'electronics': 90,
-            'clothing': 30,
-            'books': 30,
-            'home': 30,
-            'toys': 30,
-            'default': 30
-        }
+        # Add order_id to result
+        result['order_id'] = order_id
         
-        # Non-returnable categories
-        non_returnable = ['perishables', 'digital', 'gift_cards', 'personalized']
+        # Log the decision
+        try:
+            decision_logger = get_decision_logger()
+            decision_logger.log_eligibility_decision(
+                order_id=order_id,
+                purchase_date=purchase_date,
+                category=item_category,
+                eligible=result['eligible'],
+                reason=result['reason'],
+                policy_version=result.get('policy_version', 'unknown'),
+                actor_id=ACTOR_ID,
+                session_id=SESSION_ID
+            )
+        except Exception as log_error:
+            print(f"Warning: Failed to log decision: {log_error}")
         
-        category_lower = item_category.lower()
+        return result
         
-        if category_lower in non_returnable:
-            return {
-                'eligible': False,
-                'reason': f'{item_category} items are not eligible for return',
-                'order_id': order_id,
-                'days_since_purchase': days_since_purchase
-            }
-        
-        window = return_windows.get(category_lower, return_windows['default'])
-        
-        if days_since_purchase <= window:
-            return {
-                'eligible': True,
-                'reason': f'Item is within {window}-day return window',
-                'order_id': order_id,
-                'days_since_purchase': days_since_purchase,
-                'days_remaining': window - days_since_purchase
-            }
-        else:
-            return {
-                'eligible': False,
-                'reason': f'Return window of {window} days has expired',
-                'order_id': order_id,
-                'days_since_purchase': days_since_purchase
-            }
     except ValueError:
         return {
             'eligible': False,
@@ -95,50 +89,47 @@ def check_return_eligibility(purchase_date: str, item_category: str, order_id: s
 
 @tool
 def calculate_refund_amount(original_price: float, item_condition: str, return_reason: str) -> dict:
-    condition_lower = item_condition.lower()
-    reason_lower = return_reason.lower()
-    
-    refund_percentage = 100
-    restocking_fee = 0
-    shipping_refund = True
-    
-    # Defective or wrong item - full refund
-    if reason_lower in ['defective', 'wrong_item']:
-        refund_percentage = 100
-        restocking_fee = 0
-        shipping_refund = True
-    # Changed mind - depends on condition
-    else:
-        if condition_lower == 'unopened':
-            refund_percentage = 100
-            restocking_fee = 0
-        elif condition_lower == 'opened_unused':
-            refund_percentage = 100
-            restocking_fee = original_price * 0.15  # 15% restocking fee
-        elif condition_lower == 'used':
-            refund_percentage = 80
-            restocking_fee = original_price * 0.20  # 20% restocking fee
-        elif condition_lower == 'damaged':
-            refund_percentage = 50
-            restocking_fee = 0
-        else:
-            refund_percentage = 100
-            restocking_fee = 0
+    """
+    Calculate refund amount based on price, condition, and return reason.
+    Uses configurable policy from YAML/JSON file.
+    """
+    try:
+        policy = _get_policy()
+        result = policy.calculate_refund(original_price, item_condition, return_reason)
         
-        shipping_refund = False
-    
-    refund_amount = (original_price * refund_percentage / 100) - restocking_fee
-    refund_amount = max(0, refund_amount)  # Ensure non-negative
-    
-    return {
-        'original_price': original_price,
-        'refund_amount': round(refund_amount, 2),
-        'refund_percentage': refund_percentage,
-        'restocking_fee': round(restocking_fee, 2),
-        'shipping_refunded': shipping_refund,
-        'item_condition': item_condition,
-        'return_reason': return_reason
-    }
+        # Log the decision
+        try:
+            decision_logger = get_decision_logger()
+            decision_logger.log_refund_decision(
+                order_id='unknown',
+                original_price=original_price,
+                refund_amount=result['refund_amount'],
+                item_condition=item_condition,
+                return_reason=return_reason,
+                policy_version=result.get('policy_version', 'unknown'),
+                actor_id=ACTOR_ID,
+                session_id=SESSION_ID
+            )
+        except Exception as log_error:
+            print(f"Warning: Failed to log decision: {log_error}")
+        
+        return result
+    except Exception as e:
+        return {
+            'error': f'Error calculating refund: {str(e)}',
+            'original_price': original_price,
+            'item_condition': item_condition,
+            'return_reason': return_reason
+        }
+
+@tool
+def get_policy_info() -> dict:
+    """Get information about the current return policy in use"""
+    try:
+        policy = _get_policy()
+        return policy.get_policy_info()
+    except Exception as e:
+        return {'error': str(e)}
 
 @tool
 def format_policy_response(policy_text: str, category: str = 'general') -> str:
@@ -174,8 +165,8 @@ def format_policy_response(policy_text: str, category: str = 'general') -> str:
 def run_agent(user_input: str, session_id: str = SESSION_ID, actor_id: str = ACTOR_ID):
     """Run the agent with user input"""
     
-    # Build tools list
-    custom_tools = [retrieve, current_time, check_return_eligibility, calculate_refund_amount, format_policy_response]
+    # Build tools list - includes policy-driven tools
+    custom_tools = [retrieve, current_time, check_return_eligibility, calculate_refund_amount, get_policy_info, format_policy_response]
     
     # Create agent
     agent = Agent(

@@ -39,20 +39,35 @@ All code patches from `patches/` directory have been applied to the working tree
 
 ---
 
-### ✅ Patch 003: Policy Engine Integration (Pending)
-**Status**: Infrastructure created, agent integration pending
+### ✅ Patch 003: Policy Engine Integration (Applied)
+**Status**: ✅ Fully integrated into agent files
 
-**What's Ready**:
-- Policy engine module fully functional
-- Can be imported and used by agents
+**Files Modified**:
+- `src/agents/17_runtime_agent.py` - Runtime agent with policy engine
+- `src/agents/01_returns_refunds_agent.py` - Basic agent with policy engine
 
-**What's Needed**:
-- Modify `src/agents/17_runtime_agent.py` to use policy engine
-- Modify `src/agents/01_returns_refunds_agent.py` to use policy engine
-- Replace hardcoded business logic with policy engine calls
-- Add `get_policy_info()` tool to agents
+**Changes Made**:
+1. Added imports for policy_engine and decision_logger
+2. Added `_get_policy()` helper function
+3. Refactored `check_return_eligibility()` to use policy engine (~50 lines → ~20 lines)
+4. Refactored `calculate_refund_amount()` to use policy engine (~50 lines → ~20 lines)
+5. Added `get_policy_info()` tool to query policy metadata
+6. Added decision logging after each decision
+7. Updated system prompts to mention configurable policies
+8. Updated tools list to include `get_policy_info`
 
-**Impact**: ~140 lines of hardcoded logic will be replaced with ~30 lines of policy engine calls
+**Impact**: 
+- ~110 lines of hardcoded logic removed
+- ~40 lines of policy engine calls added
+- Net reduction: ~70 lines per agent file
+- All decisions now include policy version tracking
+- All decisions automatically logged for audit trail
+
+**Benefits**:
+- ✅ Policies can be changed without code deployment
+- ✅ Every decision logged with policy version
+- ✅ Cleaner, more maintainable code
+- ✅ Easier to test and modify policies
 
 ---
 
@@ -158,52 +173,25 @@ infrastructure/
 
 ## Next Steps
 
-### 1. Integrate Policy Engine into Agents (Patch 003)
-To complete the integration, modify the agent files:
+### 1. ✅ Integrate Policy Engine into Agents (Patch 003) - COMPLETED
+The policy engine has been successfully integrated into both agent files:
+- `src/agents/17_runtime_agent.py` - Runtime agent
+- `src/agents/01_returns_refunds_agent.py` - Basic agent
 
-**File**: `src/agents/17_runtime_agent.py`
-- Import: `from src.agents.policy_engine import get_policy_engine`
-- Add helper: `def _get_policy(): return get_policy_engine()`
-- Refactor `check_return_eligibility()` to use `policy.check_eligibility()`
-- Refactor `calculate_refund_amount()` to use `policy.calculate_refund()`
-- Add new tool: `get_policy_info()`
-- Update system prompt to mention configurable policies
+Both agents now use the policy engine for all eligibility and refund decisions, with automatic decision logging.
 
-**File**: `src/agents/01_returns_refunds_agent.py`
-- Same changes as runtime agent
+### 2. Test the System
+Run the test scripts to verify everything works:
 
-**Expected Result**:
-- ~140 lines of hardcoded logic removed
-- ~30 lines of policy engine calls added
-- Net reduction: ~110 lines
-- All decisions include policy version
+```bash
+# Test policy engine
+python tests/test_policy_engine.py
 
-### 2. Integrate Decision Logging into Tools
-Add logging calls after decisions are made:
+# Test decision logger
+python tests/test_decision_logger.py
 
-```python
-from src.agents.decision_logger import get_decision_logger
-
-@tool
-def check_return_eligibility(purchase_date, category, order_id):
-    policy = get_policy_engine()
-    result = policy.check_eligibility(purchase_date, category)
-    result['order_id'] = order_id
-    
-    # Log the decision
-    logger = get_decision_logger()
-    logger.log_eligibility_decision(
-        order_id=order_id,
-        purchase_date=purchase_date,
-        category=category,
-        eligible=result['eligible'],
-        reason=result['reason'],
-        policy_version=result['policy_version'],
-        actor_id=context.actor_id if context else None,
-        session_id=context.session_id if context else None
-    )
-    
-    return result
+# Test complete integration
+python tests/test_integration.py
 ```
 
 ### 3. Create DynamoDB Table (Optional)
@@ -213,20 +201,8 @@ python infrastructure/create_decision_log_table.py
 
 If this fails, decision logging will automatically fall back to S3 or CloudWatch only.
 
-### 4. Test the System
-```bash
-# Test policy engine
-python -c "from src.agents.policy_engine import PolicyEngine; p = PolicyEngine(); print(p.get_policy_info())"
-
-# Test decision logger
-python -c "from src.agents.decision_logger import get_decision_logger; logger = get_decision_logger(); print('Decision logging initialized')"
-
-# Test with custom policy
-POLICY_FILE=policies/default_policy.yaml python -c "from src.agents.policy_engine import PolicyEngine; p = PolicyEngine(); print(p.check_eligibility('2026-03-01', 'electronics'))"
-```
-
-### 5. Deploy Updated Agent
-Once integration is complete:
+### 4. Deploy Updated Agent
+Once testing is complete:
 ```bash
 # Deploy to AgentCore Runtime
 python scripts/19_deploy_agent.py
