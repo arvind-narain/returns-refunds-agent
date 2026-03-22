@@ -149,6 +149,68 @@ All pages should handle empty data gracefully.
 
 ---
 
+## Prompt 4: Dashboard Tests and Integration Tests
+
+```
+Based on the Streamlit dashboard created in Prompt 3 and specs/returns-agent-v2.yaml,
+create comprehensive tests for the dashboard and end-to-end integration tests:
+
+1. Create tests/test_dashboard_utils.py:
+   - Test src/ui/utils/db.py query functions
+   - Mock DynamoDB responses using moto
+   - Test query_decisions() with various filters
+   - Test query_approvals() for different statuses
+   - Test get_metrics() calculations
+   - Test error handling for DynamoDB failures
+   - Use pytest fixtures for DynamoDB setup/teardown
+
+2. Create tests/test_approval_integration.py:
+   - Test end-to-end approval workflow
+   - Scenario 1: Low-risk return → auto-approve (risk score < 30)
+   - Scenario 2: High-risk return → add to queue (risk score > 60)
+   - Scenario 3: Manager approval → process refund, log decision
+   - Scenario 4: Manager denial → log reason, update queue
+   - Test SLA breach detection and escalation
+   - Mock all AWS services (DynamoDB, CloudWatch)
+   - Use existing test patterns from tests/test_integration.py
+
+3. Create tests/test_e2e_v2.py:
+   - Test complete V2 workflow from policy evaluation to dashboard display
+   - Test policy engine with risk scoring
+   - Test approval queue operations
+   - Test decision logging with all new fields (risk_score, policy_version)
+   - Test data flow: policy_engine → risk_scorer → approval_queue → decision_logger
+   - Verify dashboard can query and display all data correctly
+   - Include performance tests (policy evaluation < 100ms)
+
+4. Create tests/test_streamlit_pages.py (optional, for UI testing):
+   - Test page rendering without errors
+   - Test authentication flow
+   - Test role-based access control
+   - Mock st.session_state for testing
+   - Use streamlit.testing.v1 if available
+   - Note: This is optional as Streamlit UI testing is complex
+
+5. Update tests/conftest.py:
+   - Add fixtures for approval queue setup
+   - Add fixtures for dashboard test data
+   - Add helper functions for creating test approvals
+   - Reuse existing DynamoDB and policy fixtures
+
+6. Create tests/test_risk_integration.py:
+   - Test risk scoring with real policy data
+   - Test risk thresholds trigger correct routing
+   - Test risk score calculation with edge cases
+   - Test integration between risk_scorer and policy_engine
+   - Verify risk levels match expected thresholds
+
+Reference existing test patterns from tests/test_integration.py and tests/test_policy_engine.py.
+Use pytest-mock for mocking, moto for AWS services. All tests should be isolated and repeatable.
+Include docstrings explaining what each test validates.
+```
+
+---
+
 ## Usage Instructions
 
 1. **Ensure you're on the v2 branch**:
@@ -160,6 +222,7 @@ All pages should handle empty data gracefully.
    - Prompt 1 → Policy engine enhancements (Milestone 1)
    - Prompt 2 → Approval workflow (Milestone 2)
    - Prompt 3 → Dashboard (Milestone 3)
+   - Prompt 4 → Dashboard tests and integration tests (Milestone 4)
 
 3. **After each prompt**:
    - Review generated code
@@ -177,6 +240,15 @@ All pages should handle empty data gracefully.
    
    # After Prompt 3
    streamlit run src/ui/dashboard_app.py
+   
+   # After Prompt 4
+   pytest tests/test_dashboard_utils.py
+   pytest tests/test_approval_integration.py
+   pytest tests/test_e2e_v2.py
+   pytest tests/test_risk_integration.py
+   
+   # Run all V2 tests
+   pytest tests/ -v --cov=src/agents --cov=src/ui
    ```
 
 ---
@@ -205,7 +277,15 @@ All pages should handle empty data gracefully.
 - `.streamlit/config.toml` (~20 lines)
 - `requirements_dashboard.txt` (~15 lines)
 
-**Total**: ~2,000 lines of production code + tests
+**Prompt 4**:
+- `tests/test_dashboard_utils.py` (~250 lines)
+- `tests/test_approval_integration.py` (~300 lines)
+- `tests/test_e2e_v2.py` (~350 lines)
+- `tests/test_risk_integration.py` (~200 lines)
+- `tests/test_streamlit_pages.py` (~150 lines, optional)
+- Updated `tests/conftest.py` (+50 lines)
+
+**Total**: ~3,000 lines of production code + comprehensive tests
 
 ---
 
@@ -214,5 +294,7 @@ All pages should handle empty data gracefully.
 - All prompts reference existing files for consistency
 - Prompts are designed to be copy-paste ready for Kiro
 - Each prompt builds on previous work (sequential dependencies)
-- Tests are included in each prompt for immediate validation
+- Tests are included in all prompts for immediate validation
+- Prompt 4 adds comprehensive integration and E2E tests
 - Dashboard integrates with existing observability infrastructure
+- Test coverage target: >80% for all new code
