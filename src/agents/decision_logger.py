@@ -1,0 +1,247 @@
+"""
+Decision Logger: Log all return/refund decisions with structured data
+
+Logs decisions to CloudWatch Logs (structured JSON) and optionally to DynamoDB
+for queryable audit trail.
+"""
+
+import os
+import json
+import uuid
+import logging
+from datetime import datetime
+from typing import Dict, Any, Optional
+import boto3
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
+
+
+class DecisionLogger:
+    """Log return/refund decisions with structured data"""
+    
+    def __init__(self, 
+                 log_to_dynamodb: bool = True,
+                 log_to_cloudwatch: bool = True,
+                 log_to_s3: bool = False):
+        """
+        Initialize decision logger.
+        
+        Args:
+            log_to_dynamodb: Log to DynamoDB table (if available)
+            log_to_cloudwatch: Log to CloudWatch Logs (always enabled)
+            log_to_s3: Log to S3 (fallback if DynamoDB unavailable)
+        """
+        self.log_to_dynamodb = log_to_dynamodb and self._check_dynamodb_available()
+        self.log_to_cloudwatch = log_to_cloudwatch
+        self.log_to_s3 = log_to_s3
+        
+        # Initialize AWS clients
+        self.region = os.environ.get('AWS_REGION', 'us-west-2')
+        
+        if self.log_to_dynamodb:
+            self.dynamodb = boto3.resource('dynamodb', region_name=self.region)
+            self.table_name = os.environ.get('DECISION_LOG_TABLE', 'returns-decision-log')
+            try:
+                self.table = self.dynamodb.Table(self.table_name)
+                logger.info(f"Decision logging to DynamoDB table: {self.table_name}")
+            except Exception as e:
+                logger.warning(f"DynamoDB table not available: {e}. Falling back to S3.")
+                self.log_to_dynamodb = False
+                self.log_to_s3 = True
+        
+        if self.log_to_s3:
+            self.s3 = boto3.client('s3', region_name=self.region)
+            self.bucket_name = os.environ.get('DECISION_LOG_BUCKET', 'returns-decision-logs')
+            logger.info(f"Decision logging to S3 bucket: {self.bucket_name}")
+        
+        # CloudWatch Logs (structured JSON)
+        if self.log_to_cloudwatch:
+            self.cw_logger = logging.getLogger('decision_log')
+            self.cw_logger.setLevel(logging.INFO)
+            logger.info("Decision logging to CloudWatch Logs enabled")
+    
+    def _check_dynamodb_available(self) -> bool:
+        """Check if DynamoDB is available and table exists"""
+        try:
+            dynamodb = boto3.client('dynamodb', region_name=os.environ.get('AWS_REGION', 'us-west-2'))
+            table_name = os.environ.get('DECISION_LOG_TABLE', 'returns-decision-log')
+            dynamodb.describe_table(TableName=table_name)
+            return True
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                logger.warning(f"DynamoDB table {table_name} not found")
+            else:
+                logger.warning(f"DynamoDB not available: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking DynamoDB: {e}")
+            return False
+    
+    def log_decision(self,
+                    decision_type: str,
+                    decision: str,
+                    inputs: Dict[str, Any],
+                    outputs: Dict[str, Any],
+                    actor_id: Optional[str] = None,
+                    session_id: Optional[str] = None,
+                    policy_version: Optional[str] = None,
+                    reason: Optional[str] = None,
+                    correlation_id: Optional[str] = None) -> str:
+        """
+        Log a decision with structured data.
+        
+        Args:
+            decision_type: Type of decision (eligibility, refund, escalation)
+            decision: Decision outcome (approved, denied, escalated)
+            inputs: Input parameters to the decision
+            outputs: Output/result of the decision
+            actor_id: ID of user/agent making decision
+            session_id: Session ID for correlation
+            policy_version: Version of policy used
+            reason: Human-readable reason for decision
+            correlation_id: ID to correlate related decisions
+        
+        Returns:
+            decision_id: Unique ID for this decision
+        """
+        # Generate decision ID
+        decision_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+        
+        # Build decision log entry
+        log_entry = {
+            'decision_id': decision_id,
+            'timestamp': timestamp,
+            'decision_type': decision_type,
+            'decision': decision,
+            'inputs': inputs,
+            'outputs': outputs,
+            'actor_id': actor_id or 'system',
+            'session_id': session_id or 'unknown',
+            'policy_version': policy_version or 'unknown',
+            'reason': reason or '',
+            'correlation_id': correlation_id or decision_id
+        }
+        
+        # Log to CloudWatch (structured JSON)
+        if self.log_to_cloudwatch:
+            self.cw_logger.info(json.dumps(log_entry))
+        
+        # Log to DynamoDB
+        if self.log_to_dynamodb:
+            try:
+                self.table.put_item(Item=log_entry)
+                logger.debug(f"Logged decision {decision_id} to DynamoDB")
+            except Exception as e:
+                logger.error(f"Failed to log to DynamoDB: {e}")
+                # Fallback to S3
+                if self.log_to_s3:
+                    self._log_to_s3(log_entry)
+        
+        # Log to S3 (if enabled)
+        elif self.log_to_s3:
+            self._log_to_s3(log_entry)
+        
+        return decision_id
+    
+    def _log_to_s3(self, log_entry: Dict[str, Any]):
+        """Log decision to S3 (fallback storage)"""
+        try:
+            # Organize by date for easier querying
+            dt = datetime.utcnow()
+            s3_key = f"decisions/{dt.year}/{dt.month:02d}/{dt.day:02d}/{log_entry['decision_id']}.json"
+            
+            self.s3.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=json.dumps(log_entry),
+                ContentType='application/json'
+            )
+            logger.debug(f"Logged decision {log_entry['decision_id']} to S3")
+        except Exception as e:
+            logger.error(f"Failed to log to S3: {e}")
+    
+    def log_eligibility_decision(self,
+                                order_id: str,
+                                purchase_date: str,
+                                category: str,
+                                eligible: bool,
+                                reason: str,
+                                policy_version: str,
+                                actor_id: Optional[str] = None,
+                                session_id: Optional[str] = None) -> str:
+        """
+        Log an eligibility check decision.
+        
+        Returns:
+            decision_id: Unique ID for this decision
+        """
+        return self.log_decision(
+            decision_type='eligibility',
+            decision='approved' if eligible else 'denied',
+            inputs={
+                'order_id': order_id,
+                'purchase_date': purchase_date,
+                'category': category
+            },
+            outputs={
+                'eligible': eligible,
+                'reason': reason
+            },
+            actor_id=actor_id,
+            session_id=session_id,
+            policy_version=policy_version,
+            reason=reason
+        )
+    
+    def log_refund_decision(self,
+                           order_id: str,
+                           original_price: float,
+                           refund_amount: float,
+                           condition: str,
+                           return_reason: str,
+                           policy_version: str,
+                           actor_id: Optional[str] = None,
+                           session_id: Optional[str] = None) -> str:
+        """
+        Log a refund calculation decision.
+        
+        Returns:
+            decision_id: Unique ID for this decision
+        """
+        return self.log_decision(
+            decision_type='refund',
+            decision='calculated',
+            inputs={
+                'order_id': order_id,
+                'original_price': original_price,
+                'condition': condition,
+                'return_reason': return_reason
+            },
+            outputs={
+                'refund_amount': refund_amount
+            },
+            actor_id=actor_id,
+            session_id=session_id,
+            policy_version=policy_version,
+            reason=f"Refund calculated: ${refund_amount} for {condition} item"
+        )
+
+
+# Global decision logger instance (lazy loaded)
+_decision_logger: Optional[DecisionLogger] = None
+
+
+def get_decision_logger() -> DecisionLogger:
+    """Get or create global decision logger instance"""
+    global _decision_logger
+    if _decision_logger is None:
+        # Check if decision logging is enabled
+        if os.environ.get('ENABLE_DECISION_LOGGING', 'true').lower() == 'true':
+            _decision_logger = DecisionLogger()
+        else:
+            logger.info("Decision logging disabled via ENABLE_DECISION_LOGGING=false")
+            # Return a no-op logger
+            _decision_logger = DecisionLogger(log_to_dynamodb=False, log_to_cloudwatch=False, log_to_s3=False)
+    return _decision_logger

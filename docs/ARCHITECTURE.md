@@ -92,22 +92,172 @@
 #### Custom Tools
 1. **check_return_eligibility**
    - Input: purchase_date, item_category, order_id
-   - Logic: Date validation, category rules
-   - Output: Eligibility status, days remaining
+   - Logic: Uses Policy Engine for configurable rules
+   - Output: Eligibility status, days remaining, policy version
 
 2. **calculate_refund_amount**
    - Input: original_price, item_condition, return_reason
-   - Logic: Condition-based calculation, restocking fees
-   - Output: Refund amount, breakdown
+   - Logic: Uses Policy Engine for configurable calculations
+   - Output: Refund amount, breakdown, policy version
 
 3. **format_policy_response**
    - Input: policy_text, category
    - Logic: Text formatting, bullet points
    - Output: Customer-friendly format
 
+4. **get_policy_info**
+   - Input: None
+   - Logic: Query current policy metadata
+   - Output: Policy name, version, effective date
+
 #### Built-in Tools
 - **current_time**: Returns current timestamp
 - **retrieve**: Knowledge Base document retrieval
+
+### 3.5 Policy Engine
+
+#### Purpose
+Replaces hardcoded business rules with configurable policies loaded from YAML/JSON files.
+
+#### Location
+- **Module**: `src/agents/policy_engine.py`
+- **Policies**: `policies/` directory
+- **Default Policy**: `policies/default_policy.yaml`
+- **Schema**: `policies/schema.json`
+
+#### Configuration
+```yaml
+# policies/default_policy.yaml
+policy_id: "default-policy-v1"
+policy_name: "Standard Return Policy"
+version: "1.0.0"
+
+return_windows:
+  electronics: 90
+  clothing: 30
+  default: 30
+
+refund_rules:
+  defective:
+    refund_percentage: 100
+    restocking_fee_percentage: 0
+    shipping_refunded: true
+  changed_mind:
+    unopened:
+      refund_percentage: 100
+      restocking_fee_percentage: 0
+    used:
+      refund_percentage: 80
+      restocking_fee_percentage: 20
+```
+
+#### Key Features
+- **Configurable Rules**: Return windows and refund calculations
+- **Version Tracking**: Every decision includes policy version
+- **Hot Reload**: Change policy without code deployment (requires restart)
+- **Validation**: JSON Schema validation on load
+- **Environment Variable**: `POLICY_FILE=policies/custom_policy.yaml`
+
+#### Usage
+```python
+from src.agents.policy_engine import get_policy_engine
+
+policy = get_policy_engine()
+result = policy.check_eligibility("2026-03-01", "electronics")
+# Returns: {'eligible': True, 'policy_version': '1.0.0', ...}
+```
+
+### 3.6 Decision Logging
+
+#### Purpose
+Comprehensive audit trail for all return/refund decisions with structured data.
+
+#### Location
+- **Module**: `src/agents/decision_logger.py`
+- **Infrastructure**: `infrastructure/decision_log_table.json`
+- **Setup Script**: `infrastructure/create_decision_log_table.py`
+
+#### Storage Backends
+
+**1. CloudWatch Logs** (Always Enabled)
+- **Format**: Structured JSON
+- **Log Group**: `/aws/bedrock-agentcore/runtimes/*`
+- **Retention**: 30 days (configurable)
+- **Use Case**: Real-time monitoring, debugging
+
+**2. DynamoDB** (Preferred)
+- **Table**: `returns-decision-log`
+- **Primary Key**: `decision_id` (UUID)
+- **GSI**: `timestamp-index` for time-based queries
+- **GSI**: `actor-index` for user-based queries
+- **Billing**: Pay-per-request
+- **Use Case**: Fast queries, dashboards, analytics
+
+**3. S3** (Fallback)
+- **Bucket**: `returns-decision-logs`
+- **Structure**: `decisions/YYYY/MM/DD/{decision_id}.json`
+- **Use Case**: Long-term archive, compliance
+
+#### Log Entry Structure
+```json
+{
+  "decision_id": "uuid-v4",
+  "timestamp": "2026-03-22T10:30:00Z",
+  "decision_type": "eligibility|refund|escalation",
+  "decision": "approved|denied|calculated",
+  "inputs": {
+    "order_id": "ORD-001",
+    "purchase_date": "2026-03-01",
+    "category": "electronics"
+  },
+  "outputs": {
+    "eligible": true,
+    "reason": "Within 90-day window"
+  },
+  "actor_id": "user_001",
+  "session_id": "session_123",
+  "policy_version": "1.0.0",
+  "reason": "Item is within 90-day return window",
+  "correlation_id": "uuid-v4"
+}
+```
+
+#### Query Capabilities
+- **By Decision ID**: Direct lookup (DynamoDB primary key)
+- **By Time Range**: Query timestamp-index
+- **By Actor**: Query actor-index for user-specific decisions
+- **By Session**: Filter by session_id for conversation flow
+- **By Policy Version**: Analyze impact of policy changes
+
+#### Environment Variables
+```bash
+ENABLE_DECISION_LOGGING=true          # Enable/disable logging
+DECISION_LOG_TABLE=returns-decision-log  # DynamoDB table name
+DECISION_LOG_BUCKET=returns-decision-logs  # S3 bucket name
+AWS_REGION=us-west-2                  # AWS region
+```
+
+#### Usage
+```python
+from src.agents.decision_logger import get_decision_logger
+
+logger = get_decision_logger()
+decision_id = logger.log_eligibility_decision(
+    order_id="ORD-001",
+    purchase_date="2026-03-01",
+    category="electronics",
+    eligible=True,
+    reason="Within 90-day window",
+    policy_version="1.0.0",
+    actor_id="user_001",
+    session_id="session_123"
+)
+```
+
+#### Automatic Fallback
+- If DynamoDB unavailable → Falls back to S3
+- If S3 unavailable → CloudWatch Logs only
+- Never fails silently, always logs somewhere
 
 ### 4. Data Layer
 
@@ -160,9 +310,38 @@
 3. **Agent Invocation** → AgentCore Runtime
 4. **Memory Retrieval** → Load user context
 5. **LLM Processing** → Claude Sonnet 4.5
-6. **Tool Execution** → Custom tools, Gateway, KB
-7. **Memory Storage** → Save conversation
-8. **Response** → Return to user
+6. **Tool Execution** → Custom tools (via Policy Engine), Gateway, KB
+7. **Decision Logging** → Log eligibility/refund decisions
+8. **Memory Storage** → Save conversation
+9. **Response** → Return to user
+
+### Policy Engine Flow
+
+1. **Initialization** → Load policy from YAML/JSON file
+2. **Validation** → Validate against JSON schema
+3. **Caching** → Store policy in memory
+4. **Tool Call** → Agent calls check_eligibility or calculate_refund
+5. **Policy Lookup** → Get return window or refund rules
+6. **Calculation** → Apply policy rules to inputs
+7. **Version Tracking** → Include policy version in result
+8. **Return** → Send result back to agent
+
+### Decision Logging Flow
+
+1. **Decision Made** → Tool returns eligibility or refund result
+2. **Log Entry Creation** → Build structured log entry with:
+   - Unique decision_id (UUID)
+   - Timestamp (ISO 8601 UTC)
+   - Decision type and outcome
+   - All inputs and outputs
+   - Actor ID, session ID
+   - Policy version used
+   - Human-readable reason
+3. **CloudWatch Logging** → Always log to CloudWatch (structured JSON)
+4. **DynamoDB Logging** → If available, write to DynamoDB table
+5. **S3 Fallback** → If DynamoDB unavailable, write to S3
+6. **Async Processing** → Non-blocking, doesn't delay response
+7. **Query Support** → Enable real-time queries and analytics
 
 ### Memory Flow
 

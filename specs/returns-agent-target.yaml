@@ -1,0 +1,2033 @@
+---
+# Returns & Refunds Agent - Target State Specification
+# Future Vision: Multi-Tenant E-Commerce Platform
+# Generated: 2026-03-22
+# Status: Target Architecture (Not Yet Implemented)
+
+metadata:
+  spec_version: "2.0.0"
+  created_date: "2026-03-22"
+  last_updated: "2026-03-22"
+  status: "target"
+  target_deployment: "Multi-region, multi-tenant production"
+  target_scale: "Mid-size e-commerce platform"
+  estimated_timeline: "12-18 months from current state"
+
+overview:
+  purpose: |
+    Production-grade, multi-tenant AI-powered returns and refunds platform for
+    mid-size e-commerce businesses. Provides automated return processing with
+    configurable policies, risk-based decision making, human-in-the-loop approvals,
+    and comprehensive observability for fraud detection and SLA compliance.
+  
+  target_users:
+    - "E-commerce merchants (100-500 merchants)"
+    - "End customers (self-service returns)"
+    - "Customer support agents (escalations)"
+    - "Risk/fraud analysts (high-risk review)"
+    - "Platform administrators (policy management)"
+  
+  deployment_model: "Multi-region serverless with active-active failover"
+  
+  target_scale:
+    traffic_level: "High (10,000-50,000 requests/day)"
+    concurrent_users: "500-2,000 concurrent customers"
+    geographic_scope: "Multi-region (us-west-2, us-east-1, eu-west-1)"
+    availability_requirement: "99.9% uptime (24/7)"
+    merchants: "100-500 active merchants"
+    
+  key_differentiators:
+    - "Multi-tenant with merchant-specific policies"
+    - "Policy-driven decision engine (no hardcoded rules)"
+    - "Risk scoring and fraud detection"
+    - "Human-in-the-loop for high-risk cases"
+    - "Real-time observability and SLA tracking"
+    - "Audit logging for compliance"
+
+
+# ==============================================================================
+# FUNCTIONAL REQUIREMENTS
+# ==============================================================================
+
+functional_requirements:
+  
+  # Multi-Tenant Support
+  multi_tenant:
+    
+    - id: FR-MT-001
+      name: "Merchant Onboarding"
+      description: |
+        Platform administrators can onboard new merchants with unique tenant IDs,
+        custom branding, and isolated data storage.
+      inputs:
+        - merchant_name: "string"
+        - merchant_id: "UUID (tenant identifier)"
+        - contact_info: "email, phone"
+        - branding: "logo, colors, custom domain"
+      outputs:
+        - tenant_id: "UUID"
+        - api_credentials: "API key, secret"
+        - onboarding_status: "active, pending, suspended"
+      isolation:
+        - "Data isolation: Each merchant's data in separate namespace"
+        - "Policy isolation: Merchant-specific return policies"
+        - "Billing isolation: Per-merchant usage tracking"
+      
+    - id: FR-MT-002
+      name: "Merchant-Specific Configuration"
+      description: |
+        Each merchant can configure their own return policies, refund rules,
+        risk thresholds, and approval workflows without affecting other merchants.
+      configurable_parameters:
+        - return_windows: "Per-category return windows (e.g., electronics: 90 days)"
+        - restocking_fees: "Per-condition fees (e.g., opened: 15%)"
+        - non_returnable_categories: "List of non-returnable product types"
+        - risk_thresholds: "Auto-approve <$50, manual review >$500"
+        - approval_workflows: "Single approver, dual approver, auto-approve"
+        - fraud_rules: "Custom fraud detection rules"
+      storage: "Policy database with versioning and audit trail"
+      
+    - id: FR-MT-003
+      name: "Tenant Isolation & Security"
+      description: |
+        Strict tenant isolation ensures no data leakage between merchants.
+        Each merchant can only access their own data and policies.
+      isolation_mechanisms:
+        - "Database: Row-level security with tenant_id"
+        - "API: Tenant ID in JWT token, validated on every request"
+        - "Storage: Separate S3 prefixes per tenant"
+        - "Memory: Separate namespaces per tenant"
+      security:
+        - "API authentication: OAuth 2.0 with tenant-scoped tokens"
+        - "Authorization: Role-based access control (RBAC)"
+        - "Audit logging: All cross-tenant access attempts logged"
+
+
+  # Policy-Driven Decision Engine
+  policy_engine:
+    
+    - id: FR-PE-001
+      name: "Configurable Return Policies"
+      description: |
+        Merchants define return policies via admin UI or API. Policies are
+        stored in database and evaluated at runtime (no code changes needed).
+      policy_structure:
+        - policy_id: "UUID"
+        - merchant_id: "UUID (tenant)"
+        - policy_name: "string (e.g., 'Electronics Return Policy')"
+        - effective_date: "datetime"
+        - expiration_date: "datetime (optional)"
+        - rules: "List of rule objects"
+      
+      rule_structure:
+        - rule_id: "UUID"
+        - condition: "JSON expression (e.g., {category: 'electronics', days_since_purchase: '<90'})"
+        - action: "approve, deny, manual_review"
+        - priority: "integer (higher priority rules evaluated first)"
+        - reason_template: "string (e.g., 'Item is within {window}-day return window')"
+      
+      example_policy: |
+        {
+          "policy_id": "pol_123",
+          "merchant_id": "merch_456",
+          "policy_name": "Standard Return Policy",
+          "rules": [
+            {
+              "rule_id": "rule_001",
+              "condition": {"category": "digital", "operator": "equals"},
+              "action": "deny",
+              "priority": 100,
+              "reason": "Digital products are non-returnable"
+            },
+            {
+              "rule_id": "rule_002",
+              "condition": {"category": "electronics", "days_since_purchase": {"operator": "<=", "value": 90}},
+              "action": "approve",
+              "priority": 90,
+              "reason": "Within 90-day return window for electronics"
+            }
+          ]
+        }
+    
+    - id: FR-PE-002
+      name: "Dynamic Refund Calculation"
+      description: |
+        Refund amounts calculated based on merchant-defined rules stored in
+        policy database. Supports complex formulas and conditional logic.
+      refund_formula_structure:
+        - base_amount: "original_price"
+        - adjustments: "List of adjustment rules"
+        - min_refund: "Minimum refund amount (e.g., $0)"
+        - max_refund: "Maximum refund amount (e.g., original_price)"
+      
+      adjustment_types:
+        - percentage_discount: "Reduce by percentage (e.g., 20% for used items)"
+        - fixed_fee: "Subtract fixed amount (e.g., $5 processing fee)"
+        - restocking_fee: "Percentage of original price (e.g., 15%)"
+        - shipping_refund: "Boolean (refund shipping or not)"
+      
+      example_formula: |
+        {
+          "formula_id": "form_789",
+          "merchant_id": "merch_456",
+          "conditions": [
+            {
+              "if": {"item_condition": "unopened", "return_reason": "changed_mind"},
+              "then": {"percentage": 100, "restocking_fee": 0, "shipping_refund": false}
+            },
+            {
+              "if": {"item_condition": "opened_unused"},
+              "then": {"percentage": 100, "restocking_fee": 15, "shipping_refund": false}
+            },
+            {
+              "if": {"return_reason": "defective"},
+              "then": {"percentage": 100, "restocking_fee": 0, "shipping_refund": true}
+            }
+          ]
+        }
+    
+    - id: FR-PE-003
+      name: "Policy Versioning & Audit Trail"
+      description: |
+        All policy changes are versioned and audited. Historical policies can
+        be retrieved for compliance and dispute resolution.
+      versioning:
+        - "Each policy change creates new version"
+        - "Version number incremented automatically"
+        - "Effective date determines which version applies"
+        - "Old versions retained for audit (never deleted)"
+      
+      audit_trail:
+        - changed_by: "User ID who made the change"
+        - changed_at: "Timestamp of change"
+        - change_type: "created, updated, deleted, activated, deactivated"
+        - diff: "JSON diff of changes"
+        - reason: "Optional reason for change"
+
+
+  # Risk Scoring & Fraud Detection
+  risk_management:
+    
+    - id: FR-RM-001
+      name: "Risk Score Calculation"
+      description: |
+        Every return request is assigned a risk score (0-100) based on multiple
+        factors. High-risk requests trigger manual review.
+      risk_factors:
+        - customer_history: "Number of previous returns, return rate"
+        - order_value: "High-value orders (>$500) are higher risk"
+        - return_frequency: "Multiple returns in short time period"
+        - item_category: "High-fraud categories (e.g., electronics, jewelry)"
+        - return_reason: "Suspicious reasons (e.g., 'changed mind' for expensive items)"
+        - account_age: "New accounts are higher risk"
+        - shipping_address: "Address changes, PO boxes, freight forwarders"
+        - payment_method: "Gift cards, prepaid cards are higher risk"
+      
+      risk_score_formula: |
+        risk_score = weighted_sum([
+          customer_return_rate * 30,
+          order_value_factor * 25,
+          return_frequency_factor * 20,
+          category_risk * 15,
+          account_age_factor * 10
+        ])
+        
+        # Normalize to 0-100
+        risk_score = min(100, max(0, risk_score))
+      
+      risk_levels:
+        - low: "0-30 (auto-approve)"
+        - medium: "31-60 (auto-approve with monitoring)"
+        - high: "61-80 (manual review recommended)"
+        - critical: "81-100 (manual review required)"
+    
+    - id: FR-RM-002
+      name: "Fraud Detection Rules"
+      description: |
+        Configurable fraud detection rules flag suspicious patterns.
+        Merchants can define custom rules based on their fraud experience.
+      fraud_rule_types:
+        - velocity_check: "Too many returns in X days"
+        - value_threshold: "Returns exceeding $X require review"
+        - pattern_matching: "Suspicious patterns (e.g., always returns same category)"
+        - blacklist_check: "Customer on merchant's blacklist"
+        - address_verification: "Shipping address doesn't match billing"
+        - device_fingerprint: "Multiple accounts from same device"
+      
+      example_fraud_rules: |
+        {
+          "rule_id": "fraud_001",
+          "merchant_id": "merch_456",
+          "rule_name": "High-value electronics velocity check",
+          "condition": {
+            "category": "electronics",
+            "order_value": {">": 500},
+            "returns_last_30_days": {">": 3}
+          },
+          "action": "flag_for_review",
+          "severity": "high"
+        }
+    
+    - id: FR-RM-003
+      name: "Risk-Based Routing"
+      description: |
+        Return requests are automatically routed based on risk score:
+        - Low risk: Auto-approve
+        - Medium risk: Auto-approve with post-approval audit
+        - High risk: Route to manual review queue
+        - Critical risk: Route to fraud analyst queue
+      routing_logic:
+        - "Risk score < merchant.auto_approve_threshold: Auto-approve"
+        - "Risk score >= merchant.manual_review_threshold: Manual review"
+        - "Fraud rules triggered: Route to fraud analyst"
+        - "High-value (>$1000): Dual approval required"
+      
+      sla_by_risk_level:
+        - low: "Instant (automated)"
+        - medium: "Instant (automated) + 24h audit"
+        - high: "4 hours (manual review)"
+        - critical: "1 hour (fraud analyst)"
+
+
+  # Human-in-the-Loop Approvals
+  human_review:
+    
+    - id: FR-HR-001
+      name: "Manual Review Queue"
+      description: |
+        High-risk return requests are placed in a review queue for human
+        approval. Reviewers see all relevant context and risk factors.
+      queue_structure:
+        - queue_id: "UUID"
+        - merchant_id: "UUID (tenant)"
+        - queue_type: "standard_review, fraud_review, high_value_review"
+        - priority: "critical, high, medium, low"
+        - sla: "Time limit for review (e.g., 4 hours)"
+      
+      review_item_data:
+        - return_request_id: "UUID"
+        - customer_info: "Name, email, account age, return history"
+        - order_details: "Order ID, items, value, purchase date"
+        - return_reason: "Customer-provided reason"
+        - risk_score: "0-100 with breakdown of factors"
+        - fraud_flags: "List of triggered fraud rules"
+        - policy_recommendation: "Auto-generated recommendation"
+        - supporting_documents: "Photos, receipts, tracking info"
+        - conversation_history: "Chat transcript with customer"
+      
+      reviewer_actions:
+        - approve: "Approve return and refund"
+        - deny: "Deny return with reason"
+        - request_more_info: "Ask customer for additional information"
+        - escalate: "Escalate to senior reviewer or fraud analyst"
+        - adjust_refund: "Approve with modified refund amount"
+    
+    - id: FR-HR-002
+      name: "Approval Workflows"
+      description: |
+        Configurable approval workflows based on risk level and order value.
+        Supports single approver, dual approver, and escalation paths.
+      workflow_types:
+        - single_approver: "One reviewer approves or denies"
+        - dual_approver: "Two reviewers must both approve"
+        - escalation: "Auto-escalate if not reviewed within SLA"
+        - consensus: "Multiple reviewers vote, majority wins"
+      
+      workflow_configuration:
+        - merchant_id: "UUID"
+        - workflow_name: "string"
+        - trigger_conditions: "Risk score, order value, fraud flags"
+        - approver_roles: "List of roles that can approve"
+        - escalation_path: "Who to escalate to if SLA breached"
+        - notification_settings: "Email, SMS, Slack alerts"
+      
+      example_workflow: |
+        {
+          "workflow_id": "wf_123",
+          "merchant_id": "merch_456",
+          "workflow_name": "High-Value Dual Approval",
+          "trigger": {"order_value": {">": 1000}},
+          "steps": [
+            {
+              "step": 1,
+              "approver_role": "senior_support_agent",
+              "sla_hours": 4,
+              "on_timeout": "escalate"
+            },
+            {
+              "step": 2,
+              "approver_role": "manager",
+              "sla_hours": 2,
+              "on_timeout": "escalate"
+            }
+          ]
+        }
+    
+    - id: FR-HR-003
+      name: "Reviewer Dashboard & Tools"
+      description: |
+        Web-based dashboard for reviewers with all tools needed to make
+        informed decisions quickly.
+      dashboard_features:
+        - queue_view: "List of pending reviews sorted by priority and SLA"
+        - detail_view: "Full context for each return request"
+        - risk_visualization: "Charts showing risk factors and trends"
+        - customer_360: "Complete customer history and profile"
+        - policy_lookup: "Quick access to merchant policies"
+        - decision_templates: "Pre-written approval/denial messages"
+        - bulk_actions: "Approve/deny multiple low-risk items at once"
+      
+      productivity_features:
+        - keyboard_shortcuts: "Fast navigation and actions"
+        - auto_refresh: "Queue updates in real-time"
+        - sla_countdown: "Visual indicator of time remaining"
+        - decision_history: "See previous decisions for similar cases"
+        - notes_and_tags: "Add internal notes and tags for tracking"
+
+
+  # Customer-Facing Features
+  customer_experience:
+    
+    - id: FR-CX-001
+      name: "Self-Service Return Portal"
+      description: |
+        Customers can initiate returns through web portal or mobile app without
+        contacting support. Provides instant eligibility check and refund estimate.
+      portal_features:
+        - order_lookup: "Search by order number or email"
+        - item_selection: "Select items to return from order"
+        - reason_selection: "Choose return reason from dropdown"
+        - condition_assessment: "Upload photos, describe condition"
+        - instant_decision: "Immediate eligibility and refund estimate"
+        - shipping_label: "Generate prepaid return label"
+        - tracking: "Track return shipment and refund status"
+      
+      user_experience:
+        - mobile_responsive: "Works on all devices"
+        - multi_language: "Support for 10+ languages"
+        - accessibility: "WCAG 2.1 AA compliant"
+        - progress_indicator: "Show steps in return process"
+        - estimated_refund: "Show refund amount before submission"
+    
+    - id: FR-CX-002
+      name: "Conversational AI Assistant"
+      description: |
+        AI-powered chat assistant helps customers through return process,
+        answers policy questions, and provides personalized recommendations.
+      assistant_capabilities:
+        - policy_questions: "Answer questions about return policies"
+        - eligibility_check: "Check if item is eligible for return"
+        - refund_estimate: "Calculate expected refund amount"
+        - troubleshooting: "Help resolve issues (e.g., defective items)"
+        - escalation: "Transfer to human agent if needed"
+        - multi_turn: "Remember conversation context"
+      
+      personalization:
+        - customer_history: "Reference previous returns and preferences"
+        - merchant_branding: "Use merchant's tone and terminology"
+        - proactive_suggestions: "Suggest alternatives (e.g., exchange vs. return)"
+    
+    - id: FR-CX-003
+      name: "Return Status Tracking"
+      description: |
+        Customers can track return status in real-time with notifications
+        at each stage of the process.
+      status_stages:
+        - initiated: "Return request submitted"
+        - approved: "Return approved, shipping label generated"
+        - in_transit: "Item shipped back to merchant"
+        - received: "Item received at warehouse"
+        - inspected: "Item inspected and verified"
+        - refunded: "Refund processed"
+        - completed: "Return completed"
+      
+      notifications:
+        - channels: "Email, SMS, push notifications, in-app"
+        - triggers: "Status changes, SLA breaches, refund processed"
+        - customization: "Customer chooses notification preferences"
+
+
+# ==============================================================================
+# NON-FUNCTIONAL REQUIREMENTS
+# ==============================================================================
+
+non_functional_requirements:
+  
+  performance:
+    latency:
+      customer_facing:
+        target_p50: "500ms (instant feel)"
+        target_p95: "1 second"
+        target_p99: "2 seconds"
+        measurement: "API response time from request to decision"
+      
+      internal_tools:
+        target_p50: "1 second"
+        target_p95: "3 seconds"
+        target_p99: "5 seconds"
+        measurement: "Dashboard load time and action response"
+      
+      batch_processing:
+        target: "Process 10,000 returns/hour"
+        measurement: "Throughput for bulk operations"
+    
+    throughput:
+      expected_load: "10,000-50,000 requests/day"
+      peak_load: "2,000 requests/hour (during sales events)"
+      concurrent_users: "500-2,000 concurrent customers"
+      burst_capacity: "5x normal load for 1 hour"
+    
+    scalability:
+      horizontal: "Auto-scale to 100+ instances"
+      vertical: "Support up to 500 merchants"
+      geographic: "Multi-region active-active"
+      data_volume: "100M+ return records, 10TB+ storage"
+  
+  availability:
+    uptime_target: "99.9% (24/7/365)"
+    acceptable_downtime: "8.76 hours/year (~43 minutes/month)"
+    recovery_time_objective: "5 minutes (RTO)"
+    recovery_point_objective: "1 minute (RPO)"
+    
+    disaster_recovery:
+      multi_region: "Active-active in 3 regions"
+      failover: "Automatic failover within 60 seconds"
+      data_replication: "Real-time cross-region replication"
+      backup: "Hourly snapshots, 30-day retention"
+  
+  reliability:
+    error_budget: "0.1% (99.9% success rate)"
+    retry_policy: "Exponential backoff, max 3 retries"
+    circuit_breaker: "Open after 5 consecutive failures, 60s cooldown"
+    graceful_degradation:
+      - "Policy engine unavailable: Use cached policies"
+      - "Risk scoring unavailable: Route to manual review"
+      - "Payment gateway unavailable: Queue refunds for later"
+    
+    data_consistency:
+      model: "Strong consistency for financial transactions"
+      isolation_level: "Serializable for refund processing"
+      conflict_resolution: "Last-write-wins with version vectors"
+
+
+  security:
+    authentication:
+      customer_auth: "OAuth 2.0 + MFA for high-value accounts"
+      merchant_auth: "OAuth 2.0 with tenant-scoped tokens"
+      internal_auth: "SSO (SAML 2.0) for employees"
+      api_auth: "API keys + JWT tokens with rate limiting"
+    
+    authorization:
+      model: "Role-Based Access Control (RBAC)"
+      roles:
+        - customer: "Can initiate returns for own orders"
+        - support_agent: "Can review and approve returns"
+        - fraud_analyst: "Can access fraud data and block customers"
+        - merchant_admin: "Can configure policies for their tenant"
+        - platform_admin: "Can manage all merchants and system config"
+      
+      permissions:
+        - read_return: "View return details"
+        - create_return: "Initiate return request"
+        - approve_return: "Approve return and process refund"
+        - deny_return: "Deny return request"
+        - configure_policy: "Modify return policies"
+        - view_analytics: "Access reporting and analytics"
+        - manage_users: "Add/remove users and assign roles"
+    
+    data_protection:
+      encryption_in_transit: "TLS 1.3"
+      encryption_at_rest: "AES-256 with customer-managed keys (CMK)"
+      pii_handling:
+        - "PII encrypted in database"
+        - "PII masked in logs (e.g., email: j***@example.com)"
+        - "PII redacted in analytics (aggregated only)"
+      
+      data_residency:
+        - "EU customers: Data stored in eu-west-1"
+        - "US customers: Data stored in us-west-2 or us-east-1"
+        - "Cross-region transfer: Only with customer consent"
+    
+    compliance:
+      standards:
+        - "PCI DSS Level 1 (payment data handling)"
+        - "SOC 2 Type II (security and availability)"
+        - "GDPR (EU data protection)"
+        - "CCPA (California privacy)"
+        - "ISO 27001 (information security)"
+      
+      audit_requirements:
+        - "All financial transactions logged immutably"
+        - "All policy changes logged with user attribution"
+        - "All data access logged with purpose"
+        - "Audit logs retained for 7 years"
+        - "Quarterly security audits"
+  
+  observability:
+    metrics:
+      business_metrics:
+        - approval_rate: "% of returns approved (by merchant, category, risk level)"
+        - fraud_rate: "% of returns flagged as fraudulent"
+        - average_refund_amount: "Mean refund amount (by merchant, category)"
+        - return_rate: "% of orders returned (by merchant, category)"
+        - time_to_resolution: "Time from request to refund (p50, p95, p99)"
+        - customer_satisfaction: "CSAT score from post-return surveys"
+        - manual_review_rate: "% of returns requiring human review"
+        - sla_compliance: "% of reviews completed within SLA"
+      
+      technical_metrics:
+        - request_rate: "Requests per second (by endpoint, tenant)"
+        - error_rate: "Errors per 100 requests (by type, tenant)"
+        - latency: "Response time (p50, p95, p99 by endpoint)"
+        - availability: "Uptime percentage (by region, service)"
+        - resource_utilization: "CPU, memory, disk usage"
+        - cache_hit_rate: "% of requests served from cache"
+        - database_performance: "Query latency, connection pool usage"
+      
+      fraud_metrics:
+        - fraud_detection_rate: "% of fraudulent returns caught"
+        - false_positive_rate: "% of legitimate returns flagged as fraud"
+        - fraud_loss_prevented: "$ value of fraud prevented"
+        - average_risk_score: "Mean risk score (by merchant, category)"
+    
+    logging:
+      structured_logging: "JSON format with correlation IDs"
+      log_levels: "DEBUG, INFO, WARN, ERROR, FATAL"
+      log_retention: "30 days hot storage, 7 years cold storage (audit logs)"
+      
+      logged_events:
+        - return_initiated: "Customer starts return process"
+        - eligibility_checked: "Policy engine evaluates eligibility"
+        - risk_scored: "Risk score calculated"
+        - fraud_flagged: "Fraud rule triggered"
+        - manual_review_queued: "Return sent to review queue"
+        - decision_made: "Approve/deny decision with reason"
+        - refund_processed: "Refund transaction completed"
+        - policy_changed: "Merchant updates policy"
+        - user_action: "Any user action in system"
+      
+      pii_handling: "PII masked or encrypted in logs"
+    
+    tracing:
+      distributed_tracing: "OpenTelemetry with Jaeger backend"
+      trace_sampling: "100% for errors, 10% for success"
+      span_attributes:
+        - tenant_id: "Merchant identifier"
+        - customer_id: "Customer identifier (hashed)"
+        - return_id: "Return request identifier"
+        - risk_score: "Calculated risk score"
+        - decision: "Approve/deny/review"
+      
+      trace_retention: "7 days for all traces, 30 days for errors"
+    
+    alerting:
+      alert_channels: "PagerDuty, Slack, email"
+      alert_severity: "P0 (critical), P1 (high), P2 (medium), P3 (low)"
+      
+      critical_alerts:
+        - "Availability <99.9% for 5 minutes"
+        - "Error rate >1% for 5 minutes"
+        - "Latency p99 >5 seconds for 5 minutes"
+        - "Fraud rate spike >50% increase"
+        - "Payment gateway unavailable"
+      
+      business_alerts:
+        - "Approval rate drops >20%"
+        - "Manual review queue >100 items"
+        - "SLA breach rate >5%"
+        - "Refund processing delayed >1 hour"
+    
+    dashboards:
+      real_time_operations: "Live metrics, error rates, latency"
+      business_analytics: "Approval rates, fraud trends, revenue impact"
+      merchant_portal: "Per-merchant metrics and trends"
+      fraud_detection: "Risk scores, fraud patterns, blocked customers"
+      sla_tracking: "Review queue depth, time to resolution, SLA compliance"
+
+
+
+# ==============================================================================
+# ARCHITECTURE
+# ==============================================================================
+
+architecture:
+  
+  overview: |
+    Multi-region, multi-tenant serverless platform with policy-driven decision
+    engine, risk scoring, human-in-the-loop approvals, and comprehensive
+    observability. Designed for 99.9% availability with active-active failover.
+  
+  deployment_model:
+    type: "Multi-region serverless"
+    regions: ["us-west-2", "us-east-1", "eu-west-1"]
+    failover: "Active-active with automatic routing"
+    load_balancing: "Global Accelerator or CloudFront"
+    data_replication: "Cross-region DynamoDB global tables"
+  
+  components:
+    
+    api_gateway:
+      service: "Amazon API Gateway (REST or HTTP API)"
+      purpose: "Customer-facing and internal API endpoints"
+      features:
+        - "Multi-tenant routing (tenant ID in path or header)"
+        - "Rate limiting per tenant"
+        - "Request validation and transformation"
+        - "CORS configuration for web portal"
+        - "Custom domain names per merchant"
+      authentication: "OAuth 2.0 + API keys"
+      authorization: "Lambda authorizer with RBAC"
+
+    
+    agent_runtime:
+      platform: "AgentCore Runtime (multi-instance)"
+      scaling: "Auto-scale 10-100 instances based on load"
+      model:
+        provider: "Amazon Bedrock"
+        model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        temperature: 0.3
+        fallback_model: "Claude Haiku for high-volume, low-complexity requests"
+      
+      session_management:
+        timeout: "15 minutes idle timeout"
+        state: "Managed by AgentCore Memory + Redis cache"
+        isolation: "Actor-based (actor_id = customer_id or agent_id)"
+      
+      instrumentation:
+        tracing: "OpenTelemetry with X-Ray backend"
+        metrics: "CloudWatch custom metrics"
+        logging: "Structured JSON logs to CloudWatch"
+    
+    policy_engine:
+      implementation: "Lambda function + DynamoDB"
+      database: "DynamoDB with GSI on merchant_id and policy_id"
+      caching: "ElastiCache Redis (5-minute TTL)"
+      versioning: "Policy version stored with each decision"
+      
+      components:
+        - policy_evaluator: "Lambda function evaluates rules"
+        - rule_engine: "JSON-based rule matching"
+        - formula_calculator: "Dynamic refund calculation"
+        - policy_manager: "Admin API for policy CRUD"
+
+    
+    risk_scoring_service:
+      implementation: "Lambda function + SageMaker (optional ML model)"
+      features:
+        - "Real-time risk score calculation (0-100)"
+        - "Fraud rule evaluation"
+        - "Customer history lookup"
+        - "Device fingerprinting integration"
+      
+      data_sources:
+        - customer_history: "DynamoDB (return rate, account age)"
+        - order_data: "Order management system API"
+        - fraud_database: "Shared fraud database (blacklist, patterns)"
+        - device_fingerprint: "Third-party service (e.g., Sift, Forter)"
+      
+      ml_model:
+        type: "Gradient boosting (XGBoost or LightGBM)"
+        training: "Monthly retraining on historical fraud data"
+        features: "30+ features (customer, order, behavioral)"
+        deployment: "SageMaker endpoint (real-time inference)"
+    
+    review_queue_service:
+      implementation: "Step Functions + DynamoDB + SQS"
+      workflow:
+        - "High-risk returns added to DynamoDB queue table"
+        - "SQS FIFO queue for ordered processing"
+        - "Step Functions orchestrate approval workflow"
+        - "SNS notifications to reviewers"
+      
+      queue_management:
+        - priority_queue: "Critical items processed first"
+        - sla_tracking: "DynamoDB TTL for SLA expiration"
+        - auto_escalation: "Step Functions timer triggers escalation"
+
+    
+    customer_portal:
+      implementation: "React SPA + API Gateway + CloudFront"
+      hosting: "S3 static website + CloudFront CDN"
+      features:
+        - "Responsive design (mobile-first)"
+        - "Multi-language support (i18n)"
+        - "Real-time status updates (WebSocket or polling)"
+        - "File upload for photos (S3 presigned URLs)"
+      
+      authentication:
+        - "OAuth 2.0 with Cognito"
+        - "Social login (Google, Facebook, Apple)"
+        - "MFA for high-value accounts"
+    
+    reviewer_dashboard:
+      implementation: "React SPA + API Gateway"
+      hosting: "S3 + CloudFront"
+      features:
+        - "Real-time queue updates (WebSocket)"
+        - "Bulk actions (approve/deny multiple items)"
+        - "Risk visualization (charts, heatmaps)"
+        - "Customer 360 view (history, profile)"
+        - "Decision templates and macros"
+      
+      authentication:
+        - "SSO (SAML 2.0) for internal employees"
+        - "Role-based access control (RBAC)"
+    
+    data_storage:
+      
+      primary_database:
+        service: "DynamoDB with global tables"
+        tables:
+          - returns: "Return requests (partition: tenant_id, sort: return_id)"
+          - policies: "Return policies (partition: tenant_id, sort: policy_id)"
+          - customers: "Customer profiles (partition: tenant_id, sort: customer_id)"
+          - decisions: "Decision audit log (partition: return_id, sort: timestamp)"
+          - queue: "Review queue items (partition: queue_type, sort: priority#timestamp)"
+        
+        indexes:
+          - gsi_customer_returns: "Query returns by customer_id"
+          - gsi_policy_effective: "Query active policies by effective_date"
+          - gsi_queue_sla: "Query queue items by SLA expiration"
+        
+        capacity: "On-demand with auto-scaling"
+        backup: "Point-in-time recovery (PITR) enabled"
+
+      
+      cache_layer:
+        service: "ElastiCache Redis (cluster mode)"
+        purpose: "Policy caching, session state, rate limiting"
+        ttl:
+          - policies: "5 minutes"
+          - customer_profiles: "1 minute"
+          - risk_scores: "30 seconds"
+        
+        replication: "Multi-AZ with automatic failover"
+        capacity: "3-node cluster per region"
+      
+      analytics_database:
+        service: "Amazon Redshift or Athena + S3"
+        purpose: "Business intelligence and reporting"
+        data_pipeline:
+          - "DynamoDB Streams → Lambda → S3 (Parquet)"
+          - "Daily ETL jobs aggregate metrics"
+          - "QuickSight dashboards for visualization"
+        
+        retention: "7 years for compliance"
+      
+      audit_log:
+        service: "S3 + Glacier"
+        format: "JSON Lines (JSONL)"
+        encryption: "SSE-KMS with customer-managed keys"
+        retention: "7 years (compliance requirement)"
+        immutability: "S3 Object Lock (WORM mode)"
+    
+    integration_layer:
+      
+      order_management_system:
+        protocol: "REST API or GraphQL"
+        authentication: "API key + OAuth 2.0"
+        caching: "Redis (1-minute TTL)"
+        fallback: "Graceful degradation if unavailable"
+      
+      payment_gateway:
+        provider: "Stripe, Adyen, or Braintree"
+        purpose: "Process refunds"
+        retry_logic: "Exponential backoff, max 5 retries"
+        idempotency: "Idempotency keys for refund requests"
+
+      
+      notification_service:
+        service: "Amazon SNS + SES"
+        channels:
+          - email: "SES for transactional emails"
+          - sms: "SNS for SMS notifications"
+          - push: "SNS for mobile push notifications"
+          - webhook: "SNS HTTP/HTTPS for merchant webhooks"
+        
+        templates: "SES email templates with personalization"
+        tracking: "Open rates, click rates, bounce rates"
+      
+      fraud_detection_service:
+        provider: "Third-party (Sift, Forter, Riskified) or in-house"
+        integration: "REST API with real-time scoring"
+        fallback: "Rule-based fraud detection if service unavailable"
+  
+  data_flow:
+    
+    customer_return_flow:
+      steps:
+        - "Customer submits return via portal or API"
+        - "API Gateway validates request and routes to tenant"
+        - "Policy engine evaluates eligibility"
+        - "Risk scoring service calculates risk score"
+        - "Decision: auto-approve, auto-deny, or manual review"
+        - "If manual review: Add to queue, notify reviewers"
+        - "If auto-approve: Process refund via payment gateway"
+        - "Store decision in DynamoDB with audit trail"
+        - "Send notification to customer (email, SMS, push)"
+        - "Update analytics database for reporting"
+      
+      latency_target: "500ms p50, 1s p95 (customer-facing)"
+
+    
+    manual_review_flow:
+      steps:
+        - "High-risk return added to review queue (DynamoDB + SQS)"
+        - "Step Functions workflow started"
+        - "SNS notification sent to reviewers (email, Slack)"
+        - "Reviewer opens dashboard, sees return details"
+        - "Reviewer makes decision (approve, deny, escalate)"
+        - "Decision stored in DynamoDB with reviewer ID"
+        - "If approved: Process refund via payment gateway"
+        - "Send notification to customer"
+        - "Update queue status, remove from SQS"
+        - "If SLA breached: Auto-escalate to senior reviewer"
+      
+      latency_target: "4 hours for high-risk, 1 hour for critical"
+    
+    policy_update_flow:
+      steps:
+        - "Merchant admin updates policy via admin portal"
+        - "API Gateway validates and routes to policy service"
+        - "Policy service creates new version in DynamoDB"
+        - "Invalidate Redis cache for affected policies"
+        - "Audit log records change with user attribution"
+        - "SNS notification to affected reviewers (optional)"
+        - "New policy effective immediately or at scheduled time"
+      
+      versioning: "All policy changes versioned, old versions retained"
+  
+  technology_stack:
+    
+    compute:
+      - "AWS Lambda (serverless functions)"
+      - "AgentCore Runtime (AI agent hosting)"
+      - "ECS Fargate (optional for long-running services)"
+    
+    storage:
+      - "DynamoDB (primary database)"
+      - "ElastiCache Redis (caching)"
+      - "S3 (audit logs, analytics, static assets)"
+      - "Redshift or Athena (analytics)"
+
+    
+    networking:
+      - "API Gateway (REST/HTTP API)"
+      - "CloudFront (CDN)"
+      - "Global Accelerator (multi-region routing)"
+      - "VPC (private subnets for databases)"
+      - "PrivateLink (secure service-to-service)"
+    
+    ai_ml:
+      - "Amazon Bedrock (Claude Sonnet 4.5, Haiku)"
+      - "SageMaker (fraud detection ML model)"
+      - "Bedrock Knowledge Base (policy retrieval)"
+      - "AgentCore Memory (conversation state)"
+    
+    observability:
+      - "CloudWatch (logs, metrics, alarms)"
+      - "X-Ray (distributed tracing)"
+      - "OpenTelemetry (instrumentation)"
+      - "QuickSight (business dashboards)"
+    
+    security:
+      - "Cognito (authentication)"
+      - "IAM (authorization)"
+      - "KMS (encryption keys)"
+      - "Secrets Manager (credentials)"
+      - "WAF (web application firewall)"
+      - "GuardDuty (threat detection)"
+    
+    orchestration:
+      - "Step Functions (workflow orchestration)"
+      - "EventBridge (event routing)"
+      - "SQS (message queuing)"
+      - "SNS (notifications)"
+
+
+# ==============================================================================
+# DATA MODEL
+# ==============================================================================
+
+data_model:
+  
+  overview: |
+    The data model supports multi-tenant e-commerce returns with strict isolation,
+    policy-driven decisions, risk scoring, and comprehensive audit trails. Designed
+    for high-scale operations with 100-500 merchants and 10K-50K requests/day.
+  
+  design_principles:
+    - "Tenant isolation: All entities partitioned by tenant_id"
+    - "Immutability: Audit logs and decisions are append-only"
+    - "Versioning: Policies and configurations are versioned"
+    - "Denormalization: Optimize for read-heavy workloads"
+    - "Time-series: Efficient querying by timestamp ranges"
+  
+  entities:
+    
+    merchant:
+      description: "E-commerce merchant (tenant) - root entity for multi-tenancy"
+      table: "merchants"
+      partition_key: "merchant_id (UUID)"
+      attributes:
+        merchant_id: "UUID (partition key)"
+        merchant_name: "string"
+        status: "active, suspended, deleted"
+        created_at: "timestamp"
+        contact_email: "string"
+        contact_phone: "string"
+        branding:
+          logo_url: "string (S3 URL)"
+          primary_color: "hex color"
+          custom_domain: "string (e.g., returns.merchant.com)"
+        
+        billing:
+          plan: "starter, professional, enterprise"
+          monthly_fee: "decimal"
+          usage_based: "boolean"
+          current_usage: "integer (requests this month)"
+        
+        settings:
+          default_policy_id: "UUID"
+          auto_approve_threshold: "decimal (e.g., $50)"
+          manual_review_threshold: "decimal (e.g., $500)"
+          fraud_detection_enabled: "boolean"
+          notification_preferences: "object (email, SMS, webhook)"
+      
+      indexes:
+        - "GSI: status-created_at (query active merchants)"
+        - "GSI: plan-usage (billing queries)"
+      
+      relationships:
+        - "1:N to customers"
+        - "1:N to return_policies"
+        - "1:N to return_requests"
+        - "1:N to audit_logs"
+      
+      access_patterns:
+        - "Get merchant by ID (primary key)"
+        - "List active merchants (GSI: status)"
+        - "Query merchants by plan (GSI: plan)"
+        - "Billing aggregation by usage"
+
+    
+    customer:
+      description: "End customer who purchases and returns items"
+      table: "customers"
+      partition_key: "tenant_id (UUID)"
+      sort_key: "customer_id (UUID)"
+      attributes:
+        customer_id: "UUID (sort key)"
+        tenant_id: "UUID (partition key)"
+        email: "string (unique per tenant)"
+        phone: "string"
+        account_created_at: "timestamp"
+        
+        profile:
+          first_name: "string"
+          last_name: "string"
+          shipping_address: "object (street, city, state, zip, country)"
+          billing_address: "object"
+          preferred_language: "string (en, es, fr, etc.)"
+        
+        history:
+          total_orders: "integer"
+          total_returns: "integer"
+          return_rate: "decimal (0.0-1.0)"
+          lifetime_value: "decimal"
+          last_order_date: "timestamp"
+          last_return_date: "timestamp"
+          average_order_value: "decimal"
+        
+        risk:
+          risk_score: "integer (0-100)"
+          risk_level: "low, medium, high, critical"
+          blacklisted: "boolean"
+          blacklist_reason: "string"
+          fraud_flags: "list of strings"
+          last_risk_assessment: "timestamp"
+      
+      indexes:
+        - "GSI: tenant_id-email (lookup by email)"
+        - "GSI: tenant_id-risk_score (query high-risk customers)"
+        - "GSI: tenant_id-return_rate (identify frequent returners)"
+      
+      relationships:
+        - "N:1 to merchant"
+        - "1:N to return_requests"
+        - "1:N to audit_logs (customer actions)"
+      
+      access_patterns:
+        - "Get customer by tenant + customer_id (primary key)"
+        - "Lookup customer by email (GSI: email)"
+        - "Query high-risk customers (GSI: risk_score)"
+        - "Query frequent returners (GSI: return_rate)"
+        - "Customer 360 view (join with returns, orders)"
+    
+    order:
+      description: "Customer order from merchant's order management system"
+      table: "orders (or external system)"
+      partition_key: "tenant_id (UUID)"
+      sort_key: "order_id (UUID)"
+      attributes:
+        order_id: "UUID (sort key)"
+        tenant_id: "UUID (partition key)"
+        customer_id: "UUID"
+        order_date: "timestamp"
+        order_status: "pending, shipped, delivered, cancelled"
+        
+        items:
+          - item_id: "UUID"
+            product_id: "UUID"
+            product_name: "string"
+            category: "string (electronics, clothing, etc.)"
+            quantity: "integer"
+            unit_price: "decimal"
+            total_price: "decimal"
+        
+        totals:
+          subtotal: "decimal"
+          tax: "decimal"
+          shipping: "decimal"
+          total: "decimal"
+        
+        shipping:
+          carrier: "string (UPS, FedEx, USPS)"
+          tracking_number: "string"
+          shipped_date: "timestamp"
+          delivered_date: "timestamp"
+          shipping_address: "object"
+        
+        payment:
+          payment_method: "credit_card, debit_card, paypal, etc."
+          payment_status: "pending, completed, refunded"
+          transaction_id: "string"
+      
+      indexes:
+        - "GSI: tenant_id-customer_id (customer order history)"
+        - "GSI: tenant_id-order_date (time-based queries)"
+      
+      relationships:
+        - "N:1 to merchant"
+        - "N:1 to customer"
+        - "1:N to return_requests"
+      
+      access_patterns:
+        - "Get order by tenant + order_id"
+        - "List customer orders (GSI: customer_id)"
+        - "Query orders by date range (GSI: order_date)"
+        - "Validate return eligibility (check order date, items)"
+    
+    return_request:
+      description: "Customer return request with decision and refund details"
+      table: "return_requests"
+      partition_key: "tenant_id (UUID)"
+      sort_key: "return_id (UUID)"
+      attributes:
+        return_id: "UUID (sort key)"
+        tenant_id: "UUID (partition key)"
+        customer_id: "UUID"
+        order_id: "UUID"
+        
+        items:
+          - item_id: "UUID"
+            product_name: "string"
+            quantity: "integer"
+            original_price: "decimal"
+            condition: "unopened, opened_unused, used, damaged"
+            return_reason: "defective, wrong_item, changed_mind, not_as_described, etc."
+            photos: "list of S3 URLs"
+        
+        status: "pending, approved, denied, in_review, refunded, completed, cancelled"
+        created_at: "timestamp"
+        updated_at: "timestamp"
+        
+        decision:
+          decision_type: "auto_approve, auto_deny, manual_approve, manual_deny"
+          decided_by: "system or user_id"
+          decided_at: "timestamp"
+          reason: "string (human-readable explanation)"
+          policy_id: "UUID"
+          policy_version: "integer"
+        
+        refund:
+          refund_amount: "decimal"
+          refund_percentage: "integer (0-100)"
+          restocking_fee: "decimal"
+          shipping_refunded: "boolean"
+          refund_method: "original_payment, store_credit, gift_card"
+          refund_status: "pending, processing, completed, failed"
+          refund_transaction_id: "string"
+          refund_processed_at: "timestamp"
+        
+        risk:
+          risk_score: "integer (0-100)"
+          risk_level: "low, medium, high, critical"
+          fraud_flags: "list of strings"
+          fraud_rules_triggered: "list of rule IDs"
+          risk_assessed_at: "timestamp"
+        
+        shipping:
+          return_label_url: "string (S3 URL)"
+          tracking_number: "string"
+          carrier: "string"
+          shipped_back_at: "timestamp"
+          received_at: "timestamp"
+          inspection_notes: "string"
+      
+      indexes:
+        - "GSI: tenant_id-customer_id (customer return history)"
+        - "GSI: tenant_id-status (query by status)"
+        - "GSI: tenant_id-created_at (time-based queries)"
+        - "GSI: tenant_id-risk_score (query high-risk returns)"
+      
+      relationships:
+        - "N:1 to merchant"
+        - "N:1 to customer"
+        - "N:1 to order"
+        - "N:1 to return_policy"
+        - "1:1 to review_queue_item (if manual review)"
+        - "1:N to audit_logs"
+      
+      access_patterns:
+        - "Get return by tenant + return_id"
+        - "List customer returns (GSI: customer_id)"
+        - "Query returns by status (GSI: status)"
+        - "Query returns by date range (GSI: created_at)"
+        - "Query high-risk returns (GSI: risk_score)"
+        - "Analytics: approval rate, fraud rate, refund amounts"
+
+    
+    return_policy:
+      description: "Merchant-specific return policy with versioning"
+      table: "return_policies"
+      partition_key: "tenant_id (UUID)"
+      sort_key: "policy_id#version (UUID#integer)"
+      attributes:
+        policy_id: "UUID (part of sort key)"
+        version: "integer (part of sort key)"
+        tenant_id: "UUID (partition key)"
+        policy_name: "string"
+        status: "draft, active, inactive, archived"
+        
+        effective_date: "timestamp"
+        expiration_date: "timestamp (optional)"
+        
+        rules:
+          - rule_id: "UUID"
+            priority: "integer (higher = evaluated first)"
+            condition: "JSON expression (e.g., {category: 'electronics', days_since_purchase: {'<=': 90}})"
+            action: "approve, deny, manual_review"
+            reason_template: "string with placeholders"
+        
+        refund_formulas:
+          - formula_id: "UUID"
+            conditions: "JSON expression"
+            percentage: "integer (0-100)"
+            restocking_fee: "decimal or percentage"
+            shipping_refund: "boolean"
+        
+        metadata:
+          created_by: "user_id"
+          created_at: "timestamp"
+          updated_by: "user_id"
+          updated_at: "timestamp"
+          change_reason: "string"
+          change_diff: "JSON diff from previous version"
+      
+      indexes:
+        - "GSI: tenant_id-status (query active policies)"
+        - "GSI: tenant_id-effective_date (query by date)"
+      
+      relationships:
+        - "N:1 to merchant"
+        - "1:N to return_requests (policy used for decision)"
+        - "1:N to audit_logs (policy changes)"
+      
+      access_patterns:
+        - "Get policy by tenant + policy_id + version"
+        - "Get latest active policy (GSI: status + effective_date)"
+        - "List all policy versions (query by policy_id)"
+        - "Policy audit trail (all versions with diffs)"
+    
+    review_queue_item:
+      description: "Return request in manual review queue with SLA tracking"
+      table: "review_queue"
+      partition_key: "queue_type (standard_review, fraud_review, high_value_review)"
+      sort_key: "priority#sla_deadline#return_id (composite)"
+      attributes:
+        queue_item_id: "UUID"
+        queue_type: "standard_review, fraud_review, high_value_review (partition key)"
+        return_id: "UUID (part of sort key)"
+        tenant_id: "UUID"
+        
+        priority: "critical, high, medium, low (part of sort key)"
+        sla_deadline: "timestamp (part of sort key)"
+        created_at: "timestamp"
+        
+        assigned_to: "user_id (optional)"
+        assigned_at: "timestamp (optional)"
+        
+        workflow:
+          workflow_id: "UUID"
+          current_step: "integer"
+          approvers_required: "integer"
+          approvals_received: "integer"
+          approvers: "list of user IDs"
+          approval_history: "list of {user_id, decision, timestamp}"
+        
+        status: "pending, in_progress, completed, escalated, expired"
+        completed_at: "timestamp (optional)"
+      
+      indexes:
+        - "GSI: tenant_id-status (merchant-specific queue)"
+        - "GSI: assigned_to-status (reviewer workload)"
+        - "GSI: sla_deadline (SLA monitoring)"
+      
+      relationships:
+        - "1:1 to return_request"
+        - "N:1 to merchant"
+        - "N:1 to user (assigned reviewer)"
+      
+      access_patterns:
+        - "Get next item from queue (query by queue_type, sort by priority + SLA)"
+        - "List items by reviewer (GSI: assigned_to)"
+        - "Monitor SLA breaches (GSI: sla_deadline)"
+        - "Merchant-specific queue (GSI: tenant_id)"
+        - "Queue depth metrics (count by queue_type)"
+
+    
+    decision_audit_log:
+      description: "Immutable audit trail of all decisions and actions"
+      table: "audit_logs"
+      partition_key: "return_id (UUID)"
+      sort_key: "timestamp (timestamp)"
+      attributes:
+        log_id: "UUID"
+        return_id: "UUID (partition key)"
+        timestamp: "timestamp (sort key)"
+        tenant_id: "UUID"
+        
+        event_type: "policy_evaluated, risk_scored, decision_made, refund_processed, status_changed, policy_changed, user_action"
+        
+        actor:
+          actor_type: "system, user, api, agent"
+          actor_id: "user_id or system_id"
+          ip_address: "string"
+          user_agent: "string"
+        
+        data:
+          policy_id: "UUID"
+          policy_version: "integer"
+          risk_score: "integer"
+          decision: "approve, deny, review"
+          reason: "string"
+          refund_amount: "decimal"
+          previous_status: "string"
+          new_status: "string"
+          changes: "JSON diff"
+        
+        metadata:
+          correlation_id: "UUID (trace requests)"
+          session_id: "UUID"
+          request_id: "UUID"
+          trace_id: "string (X-Ray trace ID)"
+      
+      indexes:
+        - "GSI: tenant_id-timestamp (tenant audit trail)"
+        - "GSI: actor_id-timestamp (user action history)"
+        - "GSI: event_type-timestamp (event-specific queries)"
+      
+      relationships:
+        - "N:1 to return_request"
+        - "N:1 to merchant"
+        - "N:1 to user (actor)"
+      
+      access_patterns:
+        - "Get audit trail for return (query by return_id)"
+        - "Tenant audit trail (GSI: tenant_id + timestamp)"
+        - "User action history (GSI: actor_id + timestamp)"
+        - "Event-specific queries (GSI: event_type + timestamp)"
+        - "Compliance reporting (scan with filters)"
+  
+  relationships:
+    
+    merchant_to_customer: 
+      type: "1:N (one merchant has many customers)"
+      enforcement: "Partition key (tenant_id) ensures isolation"
+      cascade: "Soft delete merchant → anonymize customer data"
+    
+    merchant_to_policy: 
+      type: "1:N (one merchant has many policies)"
+      enforcement: "Partition key (tenant_id)"
+      cascade: "Soft delete merchant → archive policies"
+    
+    customer_to_return: 
+      type: "1:N (one customer has many returns)"
+      enforcement: "GSI on customer_id"
+      cascade: "Delete customer → anonymize returns (GDPR)"
+    
+    order_to_return:
+      type: "1:N (one order can have multiple return requests)"
+      enforcement: "Foreign key (order_id)"
+      cascade: "No cascade (orders are immutable)"
+    
+    return_to_audit_log: 
+      type: "1:N (one return has many audit log entries)"
+      enforcement: "Partition key (return_id)"
+      cascade: "No cascade (audit logs are immutable)"
+    
+    policy_to_return: 
+      type: "1:N (one policy applies to many returns)"
+      enforcement: "Foreign key (policy_id + version)"
+      cascade: "No cascade (historical policy must be retained)"
+    
+    return_to_queue_item: 
+      type: "1:1 (one return has at most one queue item)"
+      enforcement: "Unique constraint on return_id"
+      cascade: "Delete return → delete queue item"
+  
+  storage_strategy:
+    
+    hot_data:
+      storage: "DynamoDB (on-demand capacity)"
+      retention: "90 days"
+      access_pattern: "Real-time queries, high throughput"
+      examples: "Active returns, current policies, review queue, customer profiles"
+      cost: "~$150-200/day at scale"
+    
+    warm_data:
+      storage: "DynamoDB (lower throughput) or S3 + Athena"
+      retention: "1 year"
+      access_pattern: "Occasional queries, analytics"
+      examples: "Completed returns, historical policies, old audit logs"
+      cost: "~$50-100/day"
+    
+    cold_data:
+      storage: "S3 (Parquet) + Athena"
+      retention: "7 years"
+      access_pattern: "Analytics and compliance queries"
+      examples: "Audit logs, historical decisions, archived policies"
+      cost: "~$10-20/day"
+    
+    archival:
+      storage: "S3 Glacier Deep Archive"
+      retention: "7+ years"
+      access_pattern: "Rare retrieval for legal/compliance"
+      examples: "Old audit logs, deleted customer data (anonymized)"
+      cost: "~$1-2/day"
+    
+    lifecycle_policies:
+      - "After 90 days: Move completed returns to warm storage"
+      - "After 1 year: Move to cold storage (S3 Parquet)"
+      - "After 7 years: Move to Glacier Deep Archive"
+      - "Audit logs: Never delete (compliance requirement)"
+  
+  data_consistency:
+    
+    strong_consistency:
+      use_cases: "Financial transactions, refund processing, policy updates"
+      implementation: "DynamoDB strongly consistent reads"
+      tradeoff: "Higher latency (~10ms vs ~5ms)"
+    
+    eventual_consistency:
+      use_cases: "Analytics, reporting, customer profiles"
+      implementation: "DynamoDB eventually consistent reads"
+      tradeoff: "Lower latency, may read stale data (<1s old)"
+    
+    cross_region_replication:
+      implementation: "DynamoDB Global Tables"
+      consistency: "Eventual consistency across regions (~1s)"
+      conflict_resolution: "Last-write-wins with version vectors"
+  
+  entities:
+    
+    merchant:
+      description: "E-commerce merchant (tenant)"
+      attributes:
+        merchant_id: "UUID (partition key)"
+        merchant_name: "string"
+        status: "active, suspended, deleted"
+        created_at: "timestamp"
+        contact_email: "string"
+        contact_phone: "string"
+        branding:
+          logo_url: "string"
+          primary_color: "hex color"
+          custom_domain: "string"
+        
+        billing:
+          plan: "starter, professional, enterprise"
+          monthly_fee: "decimal"
+          usage_based: "boolean"
+        
+        settings:
+          default_policy_id: "UUID"
+          auto_approve_threshold: "decimal (e.g., $50)"
+          manual_review_threshold: "decimal (e.g., $500)"
+          fraud_detection_enabled: "boolean"
+
+    
+    customer:
+      description: "End customer who purchases and returns items"
+      attributes:
+        customer_id: "UUID (sort key)"
+        tenant_id: "UUID (partition key)"
+        email: "string (unique per tenant)"
+        phone: "string"
+        account_created_at: "timestamp"
+        
+        profile:
+          first_name: "string"
+          last_name: "string"
+          shipping_address: "object"
+          billing_address: "object"
+        
+        history:
+          total_orders: "integer"
+          total_returns: "integer"
+          return_rate: "decimal (0.0-1.0)"
+          lifetime_value: "decimal"
+          last_order_date: "timestamp"
+          last_return_date: "timestamp"
+        
+        risk:
+          risk_score: "integer (0-100)"
+          blacklisted: "boolean"
+          blacklist_reason: "string"
+          fraud_flags: "list of strings"
+    
+    return_request:
+      description: "Customer return request"
+      attributes:
+        return_id: "UUID (sort key)"
+        tenant_id: "UUID (partition key)"
+        customer_id: "UUID"
+        order_id: "UUID"
+        
+        items:
+          - item_id: "UUID"
+            product_name: "string"
+            quantity: "integer"
+            original_price: "decimal"
+            condition: "unopened, opened_unused, used, damaged"
+            return_reason: "defective, wrong_item, changed_mind, etc."
+        
+        status: "pending, approved, denied, in_review, refunded, completed"
+        created_at: "timestamp"
+        updated_at: "timestamp"
+        
+        decision:
+          decision_type: "auto_approve, auto_deny, manual_approve, manual_deny"
+          decided_by: "system or user_id"
+          decided_at: "timestamp"
+          reason: "string"
+          policy_version: "UUID"
+        
+        refund:
+          refund_amount: "decimal"
+          refund_percentage: "integer"
+          restocking_fee: "decimal"
+          shipping_refunded: "boolean"
+          refund_method: "original_payment, store_credit, gift_card"
+          refund_status: "pending, processing, completed, failed"
+          refund_transaction_id: "string"
+        
+        risk:
+          risk_score: "integer (0-100)"
+          risk_level: "low, medium, high, critical"
+          fraud_flags: "list of strings"
+          fraud_rules_triggered: "list of rule IDs"
+
+    
+    return_policy:
+      description: "Merchant-specific return policy"
+      attributes:
+        policy_id: "UUID (sort key)"
+        tenant_id: "UUID (partition key)"
+        policy_name: "string"
+        version: "integer"
+        status: "draft, active, inactive, archived"
+        
+        effective_date: "timestamp"
+        expiration_date: "timestamp (optional)"
+        
+        rules:
+          - rule_id: "UUID"
+            priority: "integer (higher = evaluated first)"
+            condition: "JSON expression"
+            action: "approve, deny, manual_review"
+            reason_template: "string"
+        
+        refund_formulas:
+          - formula_id: "UUID"
+            conditions: "JSON expression"
+            percentage: "integer (0-100)"
+            restocking_fee: "decimal or percentage"
+            shipping_refund: "boolean"
+        
+        metadata:
+          created_by: "user_id"
+          created_at: "timestamp"
+          updated_by: "user_id"
+          updated_at: "timestamp"
+          change_reason: "string"
+    
+    review_queue_item:
+      description: "Return request in manual review queue"
+      attributes:
+        queue_item_id: "UUID (sort key)"
+        queue_type: "standard_review, fraud_review, high_value_review (partition key)"
+        return_id: "UUID"
+        tenant_id: "UUID"
+        
+        priority: "critical, high, medium, low"
+        sla_deadline: "timestamp"
+        created_at: "timestamp"
+        
+        assigned_to: "user_id (optional)"
+        assigned_at: "timestamp (optional)"
+        
+        workflow:
+          workflow_id: "UUID"
+          current_step: "integer"
+          approvers_required: "integer"
+          approvals_received: "integer"
+          approvers: "list of user IDs"
+        
+        status: "pending, in_progress, completed, escalated, expired"
+
+    
+    decision_audit_log:
+      description: "Immutable audit trail of all decisions"
+      attributes:
+        log_id: "UUID (sort key)"
+        return_id: "UUID (partition key)"
+        
+        event_type: "policy_evaluated, risk_scored, decision_made, refund_processed"
+        timestamp: "timestamp"
+        
+        actor:
+          actor_type: "system, user, api"
+          actor_id: "user_id or system_id"
+          ip_address: "string"
+          user_agent: "string"
+        
+        data:
+          policy_version: "UUID"
+          risk_score: "integer"
+          decision: "approve, deny, review"
+          reason: "string"
+          refund_amount: "decimal"
+        
+        metadata:
+          correlation_id: "UUID (trace requests)"
+          session_id: "UUID"
+  
+  relationships:
+    
+    merchant_to_customer: "1:N (one merchant has many customers)"
+    merchant_to_policy: "1:N (one merchant has many policies)"
+    customer_to_return: "1:N (one customer has many returns)"
+    return_to_audit_log: "1:N (one return has many audit log entries)"
+    policy_to_return: "1:N (one policy applies to many returns)"
+    return_to_queue_item: "1:1 (one return has at most one queue item)"
+  
+  storage_strategy:
+    
+    hot_data:
+      storage: "DynamoDB"
+      retention: "90 days"
+      access_pattern: "Real-time queries"
+      examples: "Active returns, current policies, review queue"
+    
+    warm_data:
+      storage: "DynamoDB with lower throughput"
+      retention: "1 year"
+      access_pattern: "Occasional queries"
+      examples: "Completed returns, historical policies"
+    
+    cold_data:
+      storage: "S3 (Parquet) + Athena"
+      retention: "7 years"
+      access_pattern: "Analytics and compliance queries"
+      examples: "Audit logs, historical decisions"
+    
+    archival:
+      storage: "S3 Glacier"
+      retention: "7+ years"
+      access_pattern: "Rare retrieval for legal/compliance"
+      examples: "Old audit logs, deleted customer data"
+
+
+# ==============================================================================
+# RISKS AND TRADEOFFS
+# ==============================================================================
+
+risks_and_tradeoffs:
+  
+  migration_risks:
+    
+    - risk: "Data migration from current single-tenant to multi-tenant"
+      impact: "High - requires careful planning and testing"
+      mitigation:
+        - "Phased migration: Start with new merchants, migrate existing later"
+        - "Dual-write period: Write to both old and new systems"
+        - "Extensive testing with production-like data"
+        - "Rollback plan for each migration phase"
+      timeline: "3-6 months"
+
+    
+    - risk: "Policy engine complexity increases maintenance burden"
+      impact: "Medium - more code to maintain and test"
+      mitigation:
+        - "Comprehensive unit and integration tests"
+        - "Policy validation UI to catch errors before deployment"
+        - "Gradual rollout of new policy features"
+        - "Monitoring and alerting for policy evaluation errors"
+      tradeoff: "Flexibility vs. simplicity - chose flexibility for merchant needs"
+    
+    - risk: "Multi-region deployment increases operational complexity"
+      impact: "High - more infrastructure to manage"
+      mitigation:
+        - "Infrastructure as Code (Terraform or CDK)"
+        - "Automated deployment pipelines"
+        - "Centralized monitoring and alerting"
+        - "Runbooks for common failure scenarios"
+      tradeoff: "Availability vs. complexity - chose availability for 99.9% SLA"
+    
+    - risk: "Human-in-the-loop introduces latency and cost"
+      impact: "Medium - manual review takes hours, not seconds"
+      mitigation:
+        - "Optimize auto-approval thresholds to minimize manual reviews"
+        - "Provide reviewers with excellent tools for fast decisions"
+        - "Monitor review queue depth and SLA compliance"
+        - "Hire additional reviewers if queue grows"
+      tradeoff: "Speed vs. accuracy - chose accuracy for high-risk cases"
+    
+    - risk: "Third-party fraud detection service dependency"
+      impact: "Medium - service outage affects risk scoring"
+      mitigation:
+        - "Fallback to rule-based fraud detection"
+        - "Cache fraud scores for short period"
+        - "SLA with fraud detection provider"
+        - "Multi-vendor strategy (use 2+ providers)"
+      tradeoff: "Accuracy vs. independence - chose accuracy with fallback"
+    
+    - risk: "Cost increases significantly with scale"
+      impact: "High - 10x traffic = 10x cost (or more)"
+      mitigation:
+        - "Cost monitoring and alerting"
+        - "Reserved capacity for predictable workloads"
+        - "Optimize model usage (use Haiku for simple cases)"
+        - "Aggressive caching to reduce API calls"
+      estimated_cost: "$1000-1500/day at 10K-50K requests/day"
+
+  
+  technical_tradeoffs:
+    
+    - tradeoff: "DynamoDB vs. RDS for primary database"
+      decision: "DynamoDB"
+      rationale:
+        - "Serverless, auto-scaling, no capacity planning"
+        - "Multi-region global tables for active-active"
+        - "Single-digit millisecond latency"
+        - "Pay-per-request pricing aligns with usage"
+      downside:
+        - "Limited query flexibility (no complex joins)"
+        - "Requires careful data modeling for access patterns"
+        - "More expensive at very high scale vs. provisioned RDS"
+    
+    - tradeoff: "Synchronous vs. asynchronous refund processing"
+      decision: "Synchronous for customer-facing, asynchronous for batch"
+      rationale:
+        - "Customers expect instant feedback on return approval"
+        - "Refund processing can be async (payment gateway latency)"
+        - "Retry logic easier with async processing"
+      downside:
+        - "Synchronous increases perceived latency"
+        - "Need to handle payment gateway failures gracefully"
+    
+    - tradeoff: "Rule-based vs. ML-based fraud detection"
+      decision: "Hybrid (rules + ML)"
+      rationale:
+        - "Rules catch known fraud patterns (fast, explainable)"
+        - "ML catches novel patterns (adaptive, higher accuracy)"
+        - "Fallback to rules if ML service unavailable"
+      downside:
+        - "ML model requires training data and maintenance"
+        - "ML predictions less explainable (black box)"
+        - "Higher cost (SageMaker endpoint)"
+    
+    - tradeoff: "Single model (Sonnet) vs. multi-model (Sonnet + Haiku)"
+      decision: "Multi-model"
+      rationale:
+        - "Sonnet for complex cases (policy questions, edge cases)"
+        - "Haiku for simple cases (eligibility checks, refund calculations)"
+        - "Cost optimization: Haiku is 10x cheaper"
+      downside:
+        - "Routing logic adds complexity"
+        - "Need to maintain prompts for both models"
+        - "Potential quality degradation with Haiku"
+
+    
+    - tradeoff: "Build vs. buy for fraud detection"
+      decision: "Buy (third-party service) with in-house fallback"
+      rationale:
+        - "Third-party has more fraud data (cross-merchant)"
+        - "Faster time to market (no ML model training)"
+        - "Continuous updates from vendor"
+      downside:
+        - "Vendor lock-in and dependency"
+        - "Monthly cost per transaction"
+        - "Less control over fraud rules"
+    
+    - tradeoff: "Microservices vs. monolith"
+      decision: "Microservices (Lambda functions)"
+      rationale:
+        - "Independent scaling per service"
+        - "Easier to deploy and rollback individual services"
+        - "Team autonomy (different teams own different services)"
+      downside:
+        - "Distributed system complexity"
+        - "More network calls (latency)"
+        - "Harder to debug cross-service issues"
+  
+  cost_analysis:
+    
+    current_state:
+      daily_cost: "$10-15/day"
+      monthly_cost: "$300-450/month"
+      annual_cost: "$3,600-5,400/year"
+      cost_per_request: "$0.10-0.15"
+    
+    target_state:
+      daily_cost: "$1,000-1,500/day"
+      monthly_cost: "$30,000-45,000/month"
+      annual_cost: "$360,000-540,000/year"
+      cost_per_request: "$0.02-0.03 (economies of scale)"
+      
+      breakdown:
+        bedrock_models: "$300-400/day (Claude Sonnet + Haiku)"
+        agentcore_runtime: "$200-300/day (100+ instances)"
+        dynamodb: "$150-200/day (global tables, high throughput)"
+        elasticache: "$100-150/day (3-node clusters × 3 regions)"
+        lambda: "$50-100/day (policy engine, risk scoring)"
+        sagemaker: "$100-150/day (fraud detection ML endpoint)"
+        api_gateway: "$20-30/day"
+        cloudfront: "$30-50/day"
+        s3_storage: "$10-20/day"
+        data_transfer: "$40-60/day (cross-region)"
+        third_party_fraud: "$50-100/day (per-transaction fees)"
+    
+    cost_optimization_strategies:
+      - "Use Haiku for 70% of requests (10x cheaper than Sonnet)"
+      - "Aggressive caching (Redis) to reduce API calls"
+      - "Reserved capacity for predictable workloads"
+      - "Compress data in S3 (Parquet format)"
+      - "Lifecycle policies to move old data to Glacier"
+      - "Right-size Lambda memory and timeout"
+      - "Use DynamoDB on-demand for variable workloads"
+
+  
+  open_questions:
+    
+    - question: "How to handle merchant churn and data deletion?"
+      considerations:
+        - "GDPR right to be forgotten"
+        - "Audit log retention requirements (7 years)"
+        - "Soft delete vs. hard delete"
+        - "Data anonymization vs. deletion"
+      recommendation: "Soft delete with data anonymization after 90 days"
+    
+    - question: "Should we support real-time policy updates or scheduled?"
+      considerations:
+        - "Real-time: Immediate effect, but risk of errors"
+        - "Scheduled: Safer, but less flexible"
+        - "Hybrid: Real-time with approval workflow"
+      recommendation: "Hybrid - real-time for minor changes, scheduled for major"
+    
+    - question: "How to handle cross-border returns (international merchants)?"
+      considerations:
+        - "Currency conversion"
+        - "Customs and duties"
+        - "Shipping costs (higher for international)"
+        - "Different return policies by country"
+      recommendation: "Phase 2 feature - start with domestic only"
+    
+    - question: "Should we build a mobile app or mobile-responsive web?"
+      considerations:
+        - "Mobile app: Better UX, push notifications, offline support"
+        - "Mobile web: Faster to build, no app store approval"
+        - "Cost: Mobile app requires iOS + Android development"
+      recommendation: "Start with mobile-responsive web, build app in Phase 2"
+    
+    - question: "How to handle partial returns (return some items, keep others)?"
+      considerations:
+        - "Refund calculation complexity"
+        - "Shipping cost allocation"
+        - "Risk scoring (partial returns may indicate fraud)"
+      recommendation: "Support partial returns with pro-rated shipping refund"
+    
+    - question: "Should we support exchanges (item swap) or only refunds?"
+      considerations:
+        - "Exchanges reduce refund costs (customer keeps spending)"
+        - "Inventory management complexity"
+        - "Shipping logistics (send new item before receiving old)"
+      recommendation: "Phase 2 feature - start with refunds only"
+
+
+# ==============================================================================
+# IMPLEMENTATION ROADMAP
+# ==============================================================================
+
+implementation_roadmap:
+  
+  phase_1_foundation:
+    duration: "3-4 months"
+    goal: "Multi-tenant platform with policy engine"
+    
+    deliverables:
+      - "Multi-tenant data model and database schema"
+      - "Merchant onboarding API and admin portal"
+      - "Policy engine with configurable rules"
+      - "Basic risk scoring (rule-based, no ML)"
+      - "Customer-facing API (return submission)"
+      - "Internal reviewer dashboard (basic)"
+      - "Migration plan for existing data"
+    
+    success_metrics:
+      - "10 merchants onboarded"
+      - "1000 returns processed"
+      - "Policy engine handles 95% of cases correctly"
+      - "API latency <1s p95"
+
+  
+  phase_2_scale:
+    duration: "3-4 months"
+    goal: "Production-ready with ML fraud detection and multi-region"
+    
+    deliverables:
+      - "ML-based fraud detection (SageMaker model)"
+      - "Multi-region deployment (us-west-2, us-east-1, eu-west-1)"
+      - "Advanced reviewer dashboard with bulk actions"
+      - "Customer self-service portal (web)"
+      - "Comprehensive observability (dashboards, alerts)"
+      - "Load testing and performance optimization"
+      - "Security audit and penetration testing"
+    
+    success_metrics:
+      - "100 merchants onboarded"
+      - "10,000 returns/day processed"
+      - "99.9% uptime achieved"
+      - "Fraud detection accuracy >90%"
+      - "Manual review rate <10%"
+  
+  phase_3_optimization:
+    duration: "2-3 months"
+    goal: "Cost optimization and advanced features"
+    
+    deliverables:
+      - "Multi-model strategy (Sonnet + Haiku)"
+      - "Advanced caching (Redis)"
+      - "Workflow automation (Step Functions)"
+      - "Business analytics dashboards (QuickSight)"
+      - "Mobile-responsive customer portal"
+      - "Webhook integrations for merchants"
+      - "API rate limiting and quotas"
+    
+    success_metrics:
+      - "Cost per request reduced by 50%"
+      - "500 merchants onboarded"
+      - "50,000 returns/day processed"
+      - "Customer satisfaction >4.5/5"
+      - "Reviewer productivity +30%"
+  
+  total_timeline: "12-18 months from current state to full production"
+  
+  dependencies:
+    - "Merchant sales and onboarding pipeline"
+    - "Integration with merchant order management systems"
+    - "Payment gateway partnerships"
+    - "Fraud detection vendor selection"
+    - "Compliance and legal review (PCI DSS, SOC 2, GDPR)"
+    - "Hiring: 2-3 backend engineers, 1-2 frontend engineers, 1 ML engineer, 1 DevOps"
+
+
+# ==============================================================================
+# SUCCESS CRITERIA
+# ==============================================================================
+
+success_criteria:
+  
+  business_metrics:
+    - metric: "Merchant adoption"
+      target: "100-500 active merchants within 18 months"
+      measurement: "Monthly active merchants"
+    
+    - metric: "Return processing volume"
+      target: "10,000-50,000 returns/day"
+      measurement: "Daily return request count"
+    
+    - metric: "Approval rate"
+      target: "70-80% auto-approved (low manual review rate)"
+      measurement: "% of returns auto-approved vs. manual review"
+    
+    - metric: "Fraud detection accuracy"
+      target: ">90% true positive rate, <5% false positive rate"
+      measurement: "Confusion matrix on labeled fraud data"
+    
+    - metric: "Customer satisfaction"
+      target: ">4.5/5 average rating"
+      measurement: "Post-return survey (CSAT)"
+    
+    - metric: "Reviewer productivity"
+      target: "20-30 reviews/hour per reviewer"
+      measurement: "Reviews completed per reviewer per hour"
+
+  
+  technical_metrics:
+    - metric: "Availability"
+      target: "99.9% uptime (24/7)"
+      measurement: "CloudWatch uptime monitoring"
+    
+    - metric: "Latency (customer-facing)"
+      target: "p50 <500ms, p95 <1s, p99 <2s"
+      measurement: "API Gateway latency metrics"
+    
+    - metric: "Latency (manual review)"
+      target: "p50 <4 hours, p95 <8 hours"
+      measurement: "Time from queue entry to decision"
+    
+    - metric: "Error rate"
+      target: "<0.1% (99.9% success rate)"
+      measurement: "Failed requests / total requests"
+    
+    - metric: "Data consistency"
+      target: "100% (no data loss or corruption)"
+      measurement: "Audit log validation, reconciliation reports"
+    
+    - metric: "Security incidents"
+      target: "0 critical incidents per quarter"
+      measurement: "Security incident reports"
+  
+  operational_metrics:
+    - metric: "Deployment frequency"
+      target: "Daily deployments to production"
+      measurement: "CI/CD pipeline metrics"
+    
+    - metric: "Mean time to recovery (MTTR)"
+      target: "<15 minutes for critical issues"
+      measurement: "Incident response time"
+    
+    - metric: "Cost per request"
+      target: "$0.02-0.03 at scale"
+      measurement: "AWS Cost Explorer / total requests"
+    
+    - metric: "Test coverage"
+      target: ">80% code coverage"
+      measurement: "Unit + integration test coverage"
+
+
+---
+# End of Target State Specification

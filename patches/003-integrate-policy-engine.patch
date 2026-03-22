@@ -1,0 +1,373 @@
+diff --git a/src/agents/17_runtime_agent.py b/src/agents/17_runtime_agent.py
+index 1234567..2345678 100644
+--- a/src/agents/17_runtime_agent.py
++++ b/src/agents/17_runtime_agent.py
+@@ -18,6 +18,7 @@ from mcp.client.streamable_http import streamablehttp_client
+ import requests
+ from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
+ from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
++from src.agents.policy_engine import get_policy_engine
+ 
+ # Configure logging
+ logging.basicConfig(level=logging.INFO)
+@@ -40,50 +41,28 @@ logger.info(f"✓ Knowledge Base ID: {kb_id}")
+ # CUSTOM TOOLS
+ # ============================================================================
+ 
++# Initialize policy engine (lazy loaded)
++def _get_policy():
++    """Get policy engine instance"""
++    return get_policy_engine()
++
+ @tool
+ def check_return_eligibility(purchase_date: str, item_category: str, order_id: str) -> dict:
+-    """Check if an item is eligible for return based on purchase date and category"""
++    """
++    Check if an item is eligible for return based on purchase date and category.
++    Uses configurable policy from YAML/JSON file.
++    """
+     try:
+-        purchase_dt = datetime.strptime(purchase_date, '%Y-%m-%d')
+-        days_since_purchase = (datetime.now() - purchase_dt).days
++        policy = _get_policy()
++        result = policy.check_eligibility(purchase_date, item_category)
+         
+-        # Define return windows by category
+-        return_windows = {
+-            'electronics': 90,
+-            'clothing': 30,
+-            'books': 30,
+-            'home': 30,
+-            'toys': 30,
+-            'default': 30
+-        }
+-        
+-        # Non-returnable categories
+-        non_returnable = ['perishables', 'digital', 'gift_cards', 'personalized']
+-        
+-        category_lower = item_category.lower()
+-        
+-        if category_lower in non_returnable:
+-            return {
+-                'eligible': False,
+-                'reason': f'{item_category} items are not eligible for return',
+-                'order_id': order_id,
+-                'days_since_purchase': days_since_purchase
+-            }
+-        
+-        window = return_windows.get(category_lower, return_windows['default'])
+-        
+-        if days_since_purchase <= window:
+-            return {
+-                'eligible': True,
+-                'reason': f'Item is within {window}-day return window',
+-                'order_id': order_id,
+-                'days_since_purchase': days_since_purchase,
+-                'days_remaining': window - days_since_purchase
+-            }
+-        else:
+-            return {
+-                'eligible': False,
+-                'reason': f'Return window of {window} days has expired',
+-                'order_id': order_id,
+-                'days_since_purchase': days_since_purchase
+-            }
++        # Add order_id to result
++        result['order_id'] = order_id
++        
++        logger.info(f"Eligibility check for order {order_id}: {result['eligible']} "
++                   f"(policy: {result.get('policy_version', 'unknown')})")
++        
++        return result
++        
+     except ValueError as e:
+         logger.error(f"Date parsing error in check_return_eligibility: {e}")
+         return {
+@@ -100,52 +79,21 @@ def check_return_eligibility(purchase_date: str, item_category: str, order_id:
+ 
+ @tool
+ def calculate_refund_amount(original_price: float, item_condition: str, return_reason: str) -> dict:
+-    """Calculate refund amount based on price, condition, and return reason"""
++    """
++    Calculate refund amount based on price, condition, and return reason.
++    Uses configurable policy from YAML/JSON file.
++    """
+     try:
+-        condition_lower = item_condition.lower()
+-        reason_lower = return_reason.lower()
++        policy = _get_policy()
++        result = policy.calculate_refund(original_price, item_condition, return_reason)
+         
+-        refund_percentage = 100
+-        restocking_fee = 0
+-        shipping_refund = True
++        logger.info(f"Refund calculation: ${original_price} -> ${result['refund_amount']} "
++                   f"({result['refund_percentage']}% - ${result['restocking_fee']} fee) "
++                   f"(policy: {result.get('policy_version', 'unknown')})")
+         
+-        # Defective or wrong item - full refund
+-        if reason_lower in ['defective', 'wrong_item']:
+-            refund_percentage = 100
+-            restocking_fee = 0
+-            shipping_refund = True
+-        # Changed mind - depends on condition
+-        else:
+-            if condition_lower == 'unopened':
+-                refund_percentage = 100
+-                restocking_fee = 0
+-            elif condition_lower == 'opened_unused':
+-                refund_percentage = 100
+-                restocking_fee = original_price * 0.15  # 15% restocking fee
+-            elif condition_lower == 'used':
+-                refund_percentage = 80
+-                restocking_fee = original_price * 0.20  # 20% restocking fee
+-            elif condition_lower == 'damaged':
+-                refund_percentage = 50
+-                restocking_fee = 0
+-            else:
+-                refund_percentage = 100
+-                restocking_fee = 0
+-            
+-            shipping_refund = False
+-        
+-        refund_amount = (original_price * refund_percentage / 100) - restocking_fee
+-        refund_amount = max(0, refund_amount)  # Ensure non-negative
+-        
+-        return {
+-            'original_price': original_price,
+-            'refund_amount': round(refund_amount, 2),
+-            'refund_percentage': refund_percentage,
+-            'restocking_fee': round(restocking_fee, 2),
+-            'shipping_refunded': shipping_refund,
+-            'item_condition': item_condition,
+-            'return_reason': return_reason
+-        }
++        return result
++        
+     except Exception as e:
+         logger.error(f"Error in calculate_refund_amount: {e}")
+         return {
+@@ -155,6 +103,18 @@ def calculate_refund_amount(original_price: float, item_condition: str, return_
+             'return_reason': return_reason
+         }
+ 
++@tool
++def get_policy_info() -> dict:
++    """
++    Get information about the current return policy in use.
++    Returns policy name, version, and effective date.
++    """
++    try:
++        policy = _get_policy()
++        return policy.get_policy_info()
++    except Exception as e:
++        logger.error(f"Error getting policy info: {e}")
++        return {'error': str(e)}
+ 
+ @tool
+ def format_policy_response(policy_text: str, category: str = 'general') -> str:
+@@ -254,7 +214,8 @@ def create_mcp_client():
+ 
+ system_prompt = f"""Production returns assistant with full memory and gateway capabilities. Use the retrieve tool to access Amazon return policy documents for accurate information.
+ 
+-When using the retrieve tool, always pass these parameters:
++You are using a configurable policy system. Use get_policy_info() to see the current policy version.
++
++When using the retrieve tool for knowledge base queries, always pass these parameters:
+ - knowledgeBaseId: {kb_id}
+ - region: {REGION}
+ - text: the search query
+@@ -262,7 +223,8 @@ When using the retrieve tool, always pass these parameters:
+ You have access to:
+ - Custom tools for checking eligibility and calculating refunds
+ - Gateway tools for external operations (like looking up orders)
+-- Customer conversation history and preferences through memory"""
++- Customer conversation history and preferences through memory
++- Policy information tool to see current policy version"""
+ 
+ @app.entrypoint
+ def invoke(payload, context=None):
+@@ -299,7 +261,8 @@ def invoke(payload, context=None):
+             region_name=REGION
+         )
+         
+-        # Custom tools list - ALL tools from original agent
++        # Custom tools list - includes policy-driven tools
++        # Note: get_policy_info added to allow agent to check policy version
+         custom_tools = [
+             retrieve, 
+             current_time, 
+diff --git a/src/agents/01_returns_refunds_agent.py b/src/agents/01_returns_refunds_agent.py
+index 3456789..4567890 100644
+--- a/src/agents/01_returns_refunds_agent.py
++++ b/src/agents/01_returns_refunds_agent.py
+@@ -11,6 +11,7 @@ from strands import Agent, tool
+ from strands.models import BedrockModel
+ from strands_tools import retrieve
+ from strands_tools import current_time
++from src.agents.policy_engine import get_policy_engine
+ from datetime import datetime
+ 
+ # Constants
+@@ -30,50 +31,28 @@ print(f"✓ Knowledge Base ID: {kb_id}")
+ # System prompt
+ system_prompt = f"""You are a helpful returns and refunds assistant. Help customers check return eligibility, calculate refunds, and understand policies. Use the retrieve tool to access Amazon return policy documents for accurate information. Be friendly and accurate.
+ 
+-When using the retrieve tool, always pass these parameters:
++You are using a configurable policy system. Use get_policy_info() to see the current policy version.
++
++When using the retrieve tool for knowledge base queries, always pass these parameters:
+ - knowledgeBaseId: {kb_id}
+ - region: {REGION}
+ - text: the search query"""
+ 
+-# Custom tool definitions
++# Initialize policy engine (lazy loaded)
++def _get_policy():
++    """Get policy engine instance"""
++    return get_policy_engine()
++
+ @tool
+ def check_return_eligibility(purchase_date: str, item_category: str, order_id: str) -> dict:
++    """
++    Check if an item is eligible for return based on purchase date and category.
++    Uses configurable policy from YAML/JSON file.
++    """
+     try:
+-        purchase_dt = datetime.strptime(purchase_date, '%Y-%m-%d')
+-        days_since_purchase = (datetime.now() - purchase_dt).days
+-        
+-        # Define return windows by category
+-        return_windows = {
+-            'electronics': 90,
+-            'clothing': 30,
+-            'books': 30,
+-            'home': 30,
+-            'toys': 30,
+-            'default': 30
+-        }
+-        
+-        # Non-returnable categories
+-        non_returnable = ['perishables', 'digital', 'gift_cards', 'personalized']
+-        
+-        category_lower = item_category.lower()
+-        
+-        if category_lower in non_returnable:
+-            return {
+-                'eligible': False,
+-                'reason': f'{item_category} items are not eligible for return',
+-                'order_id': order_id,
+-                'days_since_purchase': days_since_purchase
+-            }
+-        
+-        window = return_windows.get(category_lower, return_windows['default'])
++        policy = _get_policy()
++        result = policy.check_eligibility(purchase_date, item_category)
+         
+-        if days_since_purchase <= window:
+-            return {
+-                'eligible': True,
+-                'reason': f'Item is within {window}-day return window',
+-                'order_id': order_id,
+-                'days_since_purchase': days_since_purchase,
+-                'days_remaining': window - days_since_purchase
+-            }
+-        else:
+-            return {
+-                'eligible': False,
+-                'reason': f'Return window of {window} days has expired',
+-                'order_id': order_id,
+-                'days_since_purchase': days_since_purchase
+-            }
++        # Add order_id to result
++        result['order_id'] = order_id
++        return result
++        
+     except ValueError:
+         return {
+             'eligible': False,
+@@ -83,44 +62,26 @@ def check_return_eligibility(purchase_date: str, item_category: str, order_id:
+ 
+ @tool
+ def calculate_refund_amount(original_price: float, item_condition: str, return_reason: str) -> dict:
+-    condition_lower = item_condition.lower()
+-    reason_lower = return_reason.lower()
+-    
+-    refund_percentage = 100
+-    restocking_fee = 0
+-    shipping_refund = True
+-    
+-    # Defective or wrong item - full refund
+-    if reason_lower in ['defective', 'wrong_item']:
+-        refund_percentage = 100
+-        restocking_fee = 0
+-        shipping_refund = True
+-    # Changed mind - depends on condition
+-    else:
+-        if condition_lower == 'unopened':
+-            refund_percentage = 100
+-            restocking_fee = 0
+-        elif condition_lower == 'opened_unused':
+-            refund_percentage = 100
+-            restocking_fee = original_price * 0.15  # 15% restocking fee
+-        elif condition_lower == 'used':
+-            refund_percentage = 80
+-            restocking_fee = original_price * 0.20  # 20% restocking fee
+-        elif condition_lower == 'damaged':
+-            refund_percentage = 50
+-            restocking_fee = 0
+-        else:
+-            refund_percentage = 100
+-            restocking_fee = 0
+-        
+-        shipping_refund = False
+-    
+-    refund_amount = (original_price * refund_percentage / 100) - restocking_fee
+-    refund_amount = max(0, refund_amount)  # Ensure non-negative
+-    
+-    return {
+-        'original_price': original_price,
+-        'refund_amount': round(refund_amount, 2),
+-        'refund_percentage': refund_percentage,
+-        'restocking_fee': round(restocking_fee, 2),
+-        'shipping_refunded': shipping_refund,
+-        'item_condition': item_condition,
+-        'return_reason': return_reason
+-    }
++    """
++    Calculate refund amount based on price, condition, and return reason.
++    Uses configurable policy from YAML/JSON file.
++    """
++    try:
++        policy = _get_policy()
++        return policy.calculate_refund(original_price, item_condition, return_reason)
++    except Exception as e:
++        return {
++            'error': f'Error calculating refund: {str(e)}',
++            'original_price': original_price,
++            'item_condition': item_condition,
++            'return_reason': return_reason
++        }
++
++@tool
++def get_policy_info() -> dict:
++    """Get information about the current return policy in use"""
++    try:
++        policy = _get_policy()
++        return policy.get_policy_info()
++    except Exception as e:
++        return {'error': str(e)}
+ 
+ @tool
+ def format_policy_response(policy_text: str, category: str = 'general') -> str:
+@@ -165,7 +126,7 @@ def format_policy_response(policy_text: str, category: str = 'general') -> str:
+ def run_agent(user_input: str, session_id: str = SESSION_ID, actor_id: str = ACTOR_ID):
+     """Run the agent with user input"""
+     
+-    # Build tools list
+-    custom_tools = [retrieve, current_time, check_return_eligibility, calculate_refund_amount, format_policy_response]
++    # Build tools list - includes policy-driven tools
++    custom_tools = [retrieve, current_time, check_return_eligibility, calculate_refund_amount, get_policy_info, format_policy_response]
+     
+     # Create agent
+     agent = Agent(

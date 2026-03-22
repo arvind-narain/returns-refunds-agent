@@ -1,0 +1,56 @@
+# Default Return Policy
+# This policy matches the current hardcoded rules in the agent
+
+policy_id: "default-policy-v1"
+policy_name: "Standard Return Policy"
+version: "1.0.0"
+effective_date: "2026-03-22"
+
+# Return windows by category (in days)
+return_windows:
+  electronics: 90
+  clothing: 30
+  books: 30
+  home: 30
+  toys: 30
+  default: 30
+
+# Categories that cannot be returned
+non_returnable_categories:
+  - perishables
+  - digital
+  - gift_cards
+  - personalized
+
+# Refund calculation rules
+refund_rules:
+  # Defective items - full refund, no fees
+  defective:
+    refund_percentage: 100
+    restocking_fee_percentage: 0
+    shipping_refunded: true
+  
+  # Wrong item sent - full refund, no fees
+  wrong_item:
+    refund_percentage: 100
+    restocking_fee_percentage: 0
+    shipping_refunded: true
+  
+  # Customer changed mind - depends on condition
+  changed_mind:
+    unopened:
+      refund_percentage: 100
+      restocking_fee_percentage: 0
+      shipping_refunded: false
+    opened_unused:
+      refund_percentage: 100
+      restocking_fee_percentage: 15
+      shipping_refunded: false
+    used:
+      refund_percentage: 80
+      restocking_fee_percentage: 20
+      shipping_refunded: false
+    damaged:
+      refund_percentage: 50
+      restocking_fee_percentage: 0
+      shipping_refunded: false

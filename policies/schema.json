@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Return Policy Schema",
+  "description": "Schema for configurable return and refund policies",
+  "type": "object",
+  "required": ["policy_id", "policy_name", "version", "return_windows", "refund_rules"],
+  "properties": {
+    "policy_id": {
+      "type": "string",
+      "description": "Unique identifier for this policy"
+    },
+    "policy_name": {
+      "type": "string",
+      "description": "Human-readable policy name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Policy version (e.g., '1.0.0')"
+    },
+    "effective_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when policy becomes effective (YYYY-MM-DD)"
+    },
+    "return_windows": {
+      "type": "object",
+      "description": "Return window in days by category",
+      "properties": {
+        "electronics": {"type": "integer", "minimum": 0},
+        "clothing": {"type": "integer", "minimum": 0},
+        "books": {"type": "integer", "minimum": 0},
+        "home": {"type": "integer", "minimum": 0},
+        "toys": {"type": "integer", "minimum": 0},
+        "default": {"type": "integer", "minimum": 0}
+      },
+      "required": ["default"]
+    },
+    "non_returnable_categories": {
+      "type": "array",
+      "description": "Categories that cannot be returned",
+      "items": {
+        "type": "string"
+      }
+    },
+    "refund_rules": {
+      "type": "object",
+      "description": "Refund calculation rules by condition and reason",
+      "properties": {
+        "defective": {
+          "type": "object",
+          "properties": {
+            "refund_percentage": {"type": "integer", "minimum": 0, "maximum": 100},
+            "restocking_fee_percentage": {"type": "number", "minimum": 0, "maximum": 100},
+            "shipping_refunded": {"type": "boolean"}
+          }
+        },
+        "wrong_item": {
+          "type": "object",
+          "properties": {
+            "refund_percentage": {"type": "integer", "minimum": 0, "maximum": 100},
+            "restocking_fee_percentage": {"type": "number", "minimum": 0, "maximum": 100},
+            "shipping_refunded": {"type": "boolean"}
+          }
+        },
+        "changed_mind": {
+          "type": "object",
+          "properties": {
+            "unopened": {"$ref": "#/definitions/condition_rule"},
+            "opened_unused": {"$ref": "#/definitions/condition_rule"},
+            "used": {"$ref": "#/definitions/condition_rule"},
+            "damaged": {"$ref": "#/definitions/condition_rule"}
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "condition_rule": {
+      "type": "object",
+      "properties": {
+        "refund_percentage": {"type": "integer", "minimum": 0, "maximum": 100},
+        "restocking_fee_percentage": {"type": "number", "minimum": 0, "maximum": 100},
+        "shipping_refunded": {"type": "boolean"}
+      },
+      "required": ["refund_percentage", "restocking_fee_percentage", "shipping_refunded"]
+    }
+  }
+}

@@ -1,0 +1,1286 @@
+---
+# Returns & Refunds Agent - Current State Specification
+# Generated: 2026-03-22
+# Repository: https://github.com/arvind-narain/returns-refunds-agent
+# Status: Production-ready, deployed to AgentCore Runtime
+
+metadata:
+  spec_version: "1.0.0"
+  created_date: "2026-03-22"
+  last_updated: "2026-03-22"
+  status: "production"
+  deployment_region: "us-west-2"
+  aws_account: "943657149005"
+  agent_arn: "arn:aws:bedrock-agentcore:us-west-2:943657149005:runtime/returns_refunds_agent-Gig9iD6daP"
+
+overview:
+  purpose: |
+    AI-powered returns and refunds assistant for internal customer support agents.
+    Automates return eligibility checks, refund calculations, and policy information
+    retrieval while maintaining conversation context across sessions.
+  
+  target_users: |
+    Internal customer support agents who need to quickly determine return eligibility,
+    calculate accurate refund amounts, and provide policy information to customers.
+  
+  deployment_model: "Serverless on AWS AgentCore Runtime"
+  
+  current_scale:
+    traffic_level: "Low (internal tool, <100 requests/day)"
+    concurrent_users: "5-10 support agents"
+    geographic_scope: "Single region (us-west-2)"
+    availability_requirement: "Business hours (99.5% uptime)"
+
+
+# ==============================================================================
+# FUNCTIONAL REQUIREMENTS
+# ==============================================================================
+
+functional_requirements:
+  
+  # How internal support agents use the system
+  use_cases:
+    
+    - id: UC-001
+      name: "Check Return Eligibility"
+      actor: "Customer Support Agent"
+      description: |
+        Support agent enters customer's order ID or purchase details to determine
+        if the item is eligible for return based on company policy.
+      preconditions:
+        - Agent has customer's order ID or purchase date and item category
+        - Agent is authenticated via Streamlit UI or CLI
+      flow:
+        - Agent provides: purchase_date (YYYY-MM-DD), item_category, order_id
+        - System checks category-specific return windows
+        - System calculates days since purchase
+        - System determines eligibility and days remaining
+      postconditions:
+        - Agent receives clear yes/no eligibility status
+        - Agent sees reason (within window, expired, non-returnable)
+        - Agent knows days remaining if eligible
+      business_rules:
+        - Electronics: 90-day return window
+        - Clothing, books, home, toys: 30-day return window
+        - Non-returnable: perishables, digital, gift_cards, personalized
+      
+    - id: UC-002
+      name: "Calculate Refund Amount"
+      actor: "Customer Support Agent"
+      description: |
+        Support agent calculates exact refund amount based on item condition
+        and return reason to set customer expectations accurately.
+      preconditions:
+        - Agent knows original purchase price
+        - Agent has assessed item condition (unopened, opened, used, damaged)
+        - Agent knows return reason (defective, wrong_item, changed_mind)
+      flow:
+        - Agent provides: original_price, item_condition, return_reason
+        - System applies condition-based refund percentage
+        - System calculates restocking fees if applicable
+        - System determines shipping refund eligibility
+        - System ensures non-negative refund amount
+      postconditions:
+        - Agent receives exact refund amount (rounded to 2 decimals)
+        - Agent sees breakdown: percentage, restocking fee, shipping status
+        - Agent can communicate clear refund expectations to customer
+      business_rules:
+        - Defective/wrong_item: 100% refund, no fees, shipping refunded
+        - Unopened: 100% refund, no restocking fee
+        - Opened_unused: 100% refund, 15% restocking fee
+        - Used: 80% refund, 20% restocking fee
+        - Damaged: 50% refund, no restocking fee
+        - Customer preference returns: no shipping refund
+
+
+    - id: UC-003
+      name: "Retrieve Policy Information"
+      actor: "Customer Support Agent"
+      description: |
+        Support agent queries return policies from knowledge base to answer
+        customer questions with accurate, up-to-date policy information.
+      preconditions:
+        - Knowledge base contains current policy documents
+        - Agent has customer's question about policies
+      flow:
+        - Agent asks natural language question about policies
+        - System performs semantic search on knowledge base
+        - System retrieves relevant policy documents
+        - System formats policy text for readability
+      postconditions:
+        - Agent receives formatted policy information
+        - Policy text includes clear sections and bullet points
+        - Agent can copy/paste or read policy to customer
+      
+    - id: UC-004
+      name: "Look Up Order Details"
+      actor: "Customer Support Agent"
+      description: |
+        Support agent looks up order details by order ID to verify purchase
+        information and return eligibility without switching systems.
+      preconditions:
+        - Agent has customer's order ID
+        - Order exists in backend system
+        - Gateway and Lambda are operational
+      flow:
+        - Agent provides order ID (e.g., ORD-001)
+        - System calls gateway with OAuth authentication
+        - Gateway invokes Lambda function
+        - Lambda retrieves order from database
+        - System returns order details to agent
+      postconditions:
+        - Agent sees: product name, purchase date, amount, category
+        - Agent sees return eligibility status
+        - Agent can proceed with return/refund process
+      notes: |
+        Currently uses mock data with 3 sample orders for testing.
+        Production would connect to real order management system.
+    
+    - id: UC-005
+      name: "Multi-turn Conversation with Context"
+      actor: "Customer Support Agent"
+      description: |
+        Support agent has extended conversation with system, asking follow-up
+        questions without repeating information. System remembers context.
+      preconditions:
+        - Agent is authenticated with unique actor_id
+        - Memory system is operational
+      flow:
+        - Agent asks initial question (e.g., eligibility check)
+        - System stores conversation in memory
+        - Agent asks follow-up question referencing previous context
+        - System retrieves relevant memory (preferences, history, summaries)
+        - System provides contextually aware response
+      postconditions:
+        - Agent doesn't need to repeat information
+        - System maintains conversation flow
+        - Customer preferences are remembered across sessions
+
+
+  # Core capabilities
+  capabilities:
+    - name: "Return Eligibility Verification"
+      tool: "check_return_eligibility"
+      inputs: ["purchase_date", "item_category", "order_id"]
+      outputs: ["eligible", "reason", "days_remaining", "days_since_purchase"]
+      accuracy_requirement: "100% (deterministic business rules)"
+      
+    - name: "Refund Calculation"
+      tool: "calculate_refund_amount"
+      inputs: ["original_price", "item_condition", "return_reason"]
+      outputs: ["refund_amount", "refund_percentage", "restocking_fee", "shipping_refunded"]
+      accuracy_requirement: "100% (deterministic calculations)"
+      precision: "2 decimal places"
+      
+    - name: "Policy Document Retrieval"
+      tool: "retrieve (built-in)"
+      inputs: ["search_query", "knowledgeBaseId"]
+      outputs: ["relevant_documents", "formatted_text"]
+      accuracy_requirement: "Semantic search relevance >0.7"
+      
+    - name: "Order Lookup"
+      tool: "lookup_order (gateway)"
+      inputs: ["order_id"]
+      outputs: ["order_details", "product_info", "eligibility_status"]
+      availability: "Depends on gateway and Lambda availability"
+      
+    - name: "Conversation Memory"
+      component: "AgentCore Memory"
+      strategies: ["summary", "preferences", "semantic"]
+      retrieval_config:
+        semantic_top_k: 3
+        preferences_top_k: 3
+        summary_top_k: 2
+      processing_latency: "20-30 seconds (asynchronous)"
+
+
+# ==============================================================================
+# NON-FUNCTIONAL REQUIREMENTS
+# ==============================================================================
+
+non_functional_requirements:
+  
+  performance:
+    latency:
+      target_p50: "2 seconds (end-to-end response time)"
+      target_p95: "5 seconds"
+      target_p99: "10 seconds"
+      cold_start: "2-3 seconds (acceptable for internal tool)"
+      warm_request: "500ms-1s"
+      measurement: "From user input to agent response in UI"
+      
+    throughput:
+      expected_load: "<100 requests/day"
+      concurrent_users: "5-10 support agents"
+      peak_load: "20 requests/hour during business hours"
+      
+    scalability:
+      current: "Single AgentCore Runtime instance with auto-scaling"
+      auto_scaling_trigger: "Request volume"
+      max_concurrent: "Limited by AWS account quotas"
+  
+  correctness:
+    policy_decisions:
+      requirement: "100% accuracy for deterministic business rules"
+      validation: |
+        - Return windows must match company policy exactly
+        - Refund calculations must be mathematically correct
+        - Non-returnable categories must be enforced
+      testing: |
+        - Unit tests for all custom tools
+        - Property-based tests for refund calculations
+        - Integration tests with real policy documents
+      error_handling: |
+        - Invalid date formats: Clear error message with format guidance
+        - Missing data: Graceful degradation, request missing information
+        - Tool failures: User-friendly error, log for debugging
+    
+    refund_safety:
+      requirement: "Never issue incorrect refund amounts"
+      safeguards:
+        - Refund amount always non-negative (max(0, calculated_amount))
+        - Refund never exceeds original price
+        - Restocking fees calculated as percentage of original price
+        - All amounts rounded to 2 decimal places
+        - Defective items always get full refund (no fees)
+      audit_trail: |
+        - All calculations logged to CloudWatch
+        - Input parameters and output amounts recorded
+        - Agent actor_id tracked for accountability
+      human_oversight: |
+        - Agent reviews calculated amount before communicating to customer
+        - Agent can override or escalate unusual cases
+        - System provides breakdown for transparency
+
+
+  reliability:
+    availability:
+      target: "99.5% during business hours (8am-8pm PT, Mon-Fri)"
+      acceptable_downtime: "~2 hours/month"
+      recovery_time_objective: "15 minutes"
+      
+    fault_tolerance:
+      graceful_degradation:
+        - "Gateway unavailable: Agent continues without order lookup"
+        - "Memory unavailable: Agent continues without conversation history"
+        - "Knowledge base unavailable: Agent uses cached policies or manual lookup"
+      retry_logic:
+        - "Gateway requests: 3 retries with exponential backoff"
+        - "Memory operations: Continue without memory on failure"
+      error_recovery:
+        - "Tool failures: Log error, return user-friendly message"
+        - "Model failures: Retry once, then fail gracefully"
+    
+    data_integrity:
+      memory_isolation: "Actor-based namespaces prevent cross-user data leakage"
+      conversation_storage: "All turns stored in AgentCore Memory (DynamoDB)"
+      audit_logging: "All requests logged to CloudWatch with correlation IDs"
+  
+  security:
+    authentication:
+      method: "OAuth 2.0 via Cognito (Client Credentials Grant)"
+      token_type: "JWT bearer tokens"
+      token_expiration: "Managed by Cognito (typically 1 hour)"
+      
+    authorization:
+      gateway_access: "Scoped OAuth tokens (gateway-api/read, gateway-api/write)"
+      iam_roles: "Least-privilege permissions for each service"
+      actor_isolation: "Memory namespaces prevent cross-user access"
+      
+    data_protection:
+      in_transit: "TLS 1.2+ for all network communication"
+      at_rest: "DynamoDB encryption for memory data"
+      secrets_management: "Environment variables, never in code"
+      pii_handling: "No PII logged to CloudWatch"
+      
+    compliance:
+      internal_tool: "Not customer-facing, internal use only"
+      data_retention: "Memory events expire after 30 days (configurable)"
+      audit_trail: "All operations logged with actor_id and timestamps"
+
+
+  cost_awareness:
+    current_costs:
+      bedrock_model: |
+        - Claude Sonnet 4.5: ~$3 per 1M input tokens, ~$15 per 1M output tokens
+        - Expected: <100 requests/day × ~2K tokens/request = ~200K tokens/day
+        - Estimated: $1-2/day for model invocations
+      
+      agentcore_runtime: |
+        - Serverless pricing: Pay per request + compute time
+        - No idle costs (scales to zero)
+        - Expected: <$5/day for low traffic
+      
+      agentcore_memory: |
+        - DynamoDB storage + read/write operations
+        - Expected: <$1/day for low volume
+      
+      lambda: |
+        - Order lookup function: <1M requests/month free tier
+        - Expected: $0/day (within free tier)
+      
+      other_services:
+        - Cognito: Free tier covers usage
+        - CloudWatch Logs: ~$0.50/GB ingested
+        - X-Ray: Free tier covers traces
+        - ECR: Storage costs negligible
+      
+      total_estimated: "$10-15/day for internal tool with low traffic"
+    
+    cost_optimization:
+      - "Serverless architecture: No idle costs"
+      - "Model temperature 0.3: Reduces retries and token usage"
+      - "Memory top_k limits: Reduces retrieval costs"
+      - "Session timeout 15 min: Releases resources quickly"
+      - "Graceful degradation: Continues without expensive services if unavailable"
+    
+    cost_monitoring:
+      - "CloudWatch dashboards track request volume"
+      - "AWS Cost Explorer monitors service costs"
+      - "Alerts configured for unexpected cost spikes"
+  
+  observability:
+    logging:
+      level: "INFO for normal operations, ERROR for failures"
+      destination: "CloudWatch Logs (/aws/bedrock-agentcore/runtimes/*)"
+      retention: "Configurable (default 30 days)"
+      structured: "JSON format with correlation IDs"
+      
+    metrics:
+      - "Request count (invocations per hour/day)"
+      - "Latency (p50, p95, p99)"
+      - "Error rate (failures per 100 requests)"
+      - "Tool usage (which tools called most frequently)"
+      - "Memory retrieval time"
+      
+    tracing:
+      method: "X-Ray distributed tracing"
+      spans: "Agent invocation, tool calls, memory operations, gateway calls"
+      correlation: "Request IDs track end-to-end flow"
+      
+    dashboards:
+      - "CloudWatch GenAI Observability Dashboard"
+      - "Custom metrics for business KPIs"
+      - "Real-time log tailing for debugging"
+
+
+# ==============================================================================
+# ARCHITECTURE
+# ==============================================================================
+
+architecture:
+  
+  overview: |
+    Serverless AI agent deployed on AWS AgentCore Runtime with memory persistence,
+    external API integration via gateway, and knowledge base retrieval. Uses
+    Claude Sonnet 4.5 for natural language understanding and tool orchestration.
+  
+  components:
+    
+    llm_agent:
+      name: "Returns & Refunds Agent"
+      framework: "Strands Agents"
+      model:
+        provider: "Amazon Bedrock"
+        model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        temperature: 0.3
+        reasoning: "Low temperature for consistent, accurate policy decisions"
+      
+      agent_file_variants:
+        description: "Four agent implementations with increasing capabilities"
+        files:
+          - name: "01_returns_refunds_agent.py"
+            location: "src/agents/"
+            type: "Basic standalone agent"
+            features: ["Custom tools", "Knowledge Base retrieval"]
+            memory: false
+            gateway: false
+            runtime_ready: false
+            use_case: "Local testing, basic functionality"
+          
+          - name: "06_memory_enabled_agent.py"
+            location: "src/agents/"
+            type: "Agent with memory integration"
+            features: ["Custom tools", "Knowledge Base", "AgentCore Memory"]
+            memory: true
+            gateway: false
+            runtime_ready: false
+            use_case: "Testing memory features locally"
+          
+          - name: "14_full_agent.py"
+            location: "src/agents/"
+            type: "Full-featured agent (not runtime-ready)"
+            features: ["Custom tools", "Knowledge Base", "Memory", "Gateway"]
+            memory: true
+            gateway: true
+            runtime_ready: false
+            use_case: "Testing all features locally"
+          
+          - name: "17_runtime_agent.py"
+            location: "src/agents/"
+            type: "Production runtime agent"
+            features: ["Custom tools", "Knowledge Base", "Memory", "Gateway", "@app.entrypoint"]
+            memory: true
+            gateway: true
+            runtime_ready: true
+            use_case: "Production deployment to AgentCore Runtime"
+            note: "Uses BedrockAgentCoreApp with @app.entrypoint decorator"
+      
+      runtime:
+        platform: "AgentCore Runtime"
+        deployment: "Serverless, auto-scaling"
+        container: "Docker (linux/arm64)"
+        base_image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+        entrypoint: "17_runtime_agent.py with @app.entrypoint decorator"
+        instrumentation: "OpenTelemetry for observability"
+      
+      system_prompt: |
+        Production returns assistant with full memory and gateway capabilities.
+        Use the retrieve tool to access Amazon return policy documents for
+        accurate information. You have access to custom tools for checking
+        eligibility and calculating refunds, gateway tools for external
+        operations (like looking up orders), and customer conversation history
+        and preferences through memory.
+      
+      session_management:
+        timeout: "15 minutes idle timeout"
+        state: "Managed by AgentCore Memory"
+        isolation: "Actor-based (actor_id per support agent)"
+
+
+    tools_apis:
+      
+      custom_tools:
+        - name: "check_return_eligibility"
+          type: "Python function with @tool decorator"
+          implementation: "Deterministic business logic"
+          inputs:
+            - purchase_date: "string (YYYY-MM-DD)"
+            - item_category: "string (electronics, clothing, etc.)"
+            - order_id: "string"
+          outputs:
+            - eligible: "boolean"
+            - reason: "string"
+            - days_remaining: "integer (if eligible)"
+            - days_since_purchase: "integer"
+          error_handling: "Date validation, graceful error messages"
+        
+        - name: "calculate_refund_amount"
+          type: "Python function with @tool decorator"
+          implementation: "Deterministic calculation"
+          inputs:
+            - original_price: "float"
+            - item_condition: "string (unopened, opened_unused, used, damaged)"
+            - return_reason: "string (defective, wrong_item, changed_mind)"
+          outputs:
+            - refund_amount: "float (2 decimal places)"
+            - refund_percentage: "integer"
+            - restocking_fee: "float"
+            - shipping_refunded: "boolean"
+          validation: "Non-negative amounts, never exceeds original price"
+        
+        - name: "format_policy_response"
+          type: "Python function with @tool decorator"
+          implementation: "Text formatting and parsing"
+          inputs:
+            - policy_text: "string"
+            - category: "string (optional)"
+          outputs:
+            - formatted_text: "string with headers, bullets, emoji"
+          enhancement: "Adds customer service tips"
+      
+      built_in_tools:
+        - name: "retrieve"
+          source: "strands_tools"
+          purpose: "Knowledge base document retrieval"
+          backend: "Amazon Bedrock Knowledge Base"
+          inputs:
+            - knowledgeBaseId: "string (from kb_config.json)"
+            - region: "string (us-west-2)"
+            - text: "string (search query)"
+          outputs:
+            - relevant_documents: "list of document chunks"
+          search_method: "Semantic search with vector embeddings"
+        
+        - name: "current_time"
+          source: "strands_tools"
+          purpose: "Get current timestamp"
+          usage: "Date calculations, logging"
+
+
+      gateway_tools:
+        protocol: "Model Context Protocol (MCP)"
+        authentication: "OAuth 2.0 JWT bearer tokens"
+        
+        - name: "lookup_order"
+          type: "Lambda function via AgentCore Gateway"
+          lambda_function: "OrderLookupFunction"
+          runtime: "Python 3.12"
+          timeout: "30 seconds"
+          memory: "128 MB"
+          
+          inputs:
+            - order_id: "string (e.g., ORD-001)"
+          
+          outputs:
+            - order_details: "object"
+            - product_name: "string"
+            - purchase_date: "string (YYYY-MM-DD)"
+            - amount: "float"
+            - category: "string"
+            - return_eligible: "boolean"
+          
+          data_source: "Mock database (3 sample orders for testing)"
+          production_note: "Would connect to real order management system"
+          
+          error_handling:
+            - "Order not found: 404 with available order IDs"
+            - "Missing order_id: 400 with error message"
+            - "Lambda failure: 500 with error details"
+    
+    storage:
+      
+      agentcore_memory:
+        backend: "DynamoDB (managed by AgentCore)"
+        purpose: "Persistent conversation state and user preferences"
+        
+        strategies:
+          - name: "summary"
+            namespace: "app/{actorId}/{sessionId}/summary"
+            purpose: "Conversation summaries per session"
+            retrieval_top_k: 2
+            processing: "Asynchronous (20-30 seconds)"
+          
+          - name: "preferences"
+            namespace: "app/{actorId}/preferences"
+            purpose: "User preferences (cross-session)"
+            retrieval_top_k: 3
+            processing: "Asynchronous (20-30 seconds)"
+          
+          - name: "semantic"
+            namespace: "app/{actorId}/semantic"
+            purpose: "Factual information with embeddings"
+            retrieval_top_k: 3
+            processing: "Asynchronous (20-30 seconds)"
+        
+        isolation: "Actor-based namespaces prevent cross-user data leakage"
+        retention: "Events expire after 30 days (configurable)"
+        encryption: "DynamoDB encryption at rest"
+
+
+      knowledge_base:
+        service: "Amazon Bedrock Knowledge Base"
+        backend: "S3 + Vector embeddings"
+        content: "Return policies, FAQs, policy documents"
+        retrieval_method: "Semantic search"
+        configuration:
+          knowledge_base_id: "Stored in kb_config.json"
+          region: "us-west-2"
+        setup_note: "KB created externally (not scripted in this repo)"
+        access: "Via retrieve tool (built-in Strands tool)"
+      
+      configuration_files:
+        storage: "Local JSON files (excluded from Git)"
+        files:
+          - memory_config.json: "Memory resource ID"
+          - cognito_config.json: "OAuth credentials"
+          - gateway_config.json: "Gateway ID and URL"
+          - lambda_config.json: "Lambda ARN and tool schema"
+          - runtime_config.json: "Deployed agent ARN"
+          - kb_config.json: "Knowledge base ID"
+          - gateway_role_config.json: "Gateway IAM role ARN"
+          - runtime_execution_role_config.json: "Runtime IAM role ARN"
+        security: "Sensitive files excluded from version control"
+    
+    queues:
+      note: "No explicit queues in current architecture"
+      async_processing: |
+        - AgentCore Memory processes events asynchronously (20-30 seconds)
+        - No message queues (SQS, Kafka) currently used
+        - All request/response is synchronous from user perspective
+    
+    authentication_authorization:
+      
+      cognito:
+        service: "Amazon Cognito User Pool"
+        flow: "OAuth 2.0 Client Credentials Grant"
+        components:
+          - user_pool: "Identity provider"
+          - app_client: "OAuth client with client_id and client_secret"
+          - resource_server: "Custom scopes for gateway access"
+          - domain: "Token endpoint for OAuth flow"
+        
+        scopes:
+          - "gateway-api/read"
+          - "gateway-api/write"
+        
+        token_type: "JWT bearer token"
+        discovery_url: "https://cognito-idp.us-west-2.amazonaws.com/{pool_id}/.well-known/openid-configuration"
+      
+      iam_roles:
+        - name: "Gateway Execution Role"
+          trust_policy: "bedrock-agentcore.amazonaws.com"
+          permissions: "Lambda invocation"
+          config_file: "gateway_role_config.json"
+        
+        - name: "Runtime Execution Role"
+          trust_policy: "bedrock-agentcore.amazonaws.com"
+          permissions:
+            - "Bedrock model invocation"
+            - "AgentCore Memory operations"
+            - "AgentCore Gateway invocation"
+            - "Knowledge Base retrieval"
+            - "CloudWatch Logs write"
+            - "X-Ray tracing"
+            - "ECR image pull"
+          config_file: "runtime_execution_role_config.json"
+
+
+  interaction_flows:
+    
+    user_request_flow:
+      description: "End-to-end flow from user input to agent response"
+      steps:
+        - step: 1
+          action: "User sends message via Streamlit UI or CLI"
+          actor: "Support Agent"
+        
+        - step: 2
+          action: "UI obtains OAuth token from Cognito"
+          component: "Cognito"
+          method: "Client Credentials Grant"
+        
+        - step: 3
+          action: "Request sent to AgentCore Runtime with bearer token"
+          component: "AgentCore Runtime"
+          validation: "Token validated by custom JWT authorizer"
+        
+        - step: 4
+          action: "Runtime invokes agent entrypoint"
+          component: "Agent (@app.entrypoint)"
+          payload: "{prompt: string, actor_id: string}"
+        
+        - step: 5
+          action: "Agent retrieves memory context"
+          component: "AgentCore Memory"
+          retrieval: "Preferences, semantic facts, summaries"
+          latency: "Synchronous retrieval from DynamoDB"
+        
+        - step: 6
+          action: "Agent processes request with Claude Sonnet 4.5"
+          component: "Bedrock Model"
+          reasoning: "Determines which tools to call"
+        
+        - step: 7
+          action: "Agent calls tools as needed"
+          tools: ["custom tools", "gateway tools", "knowledge base"]
+          parallel: "Tools called sequentially by model"
+        
+        - step: 8
+          action: "Agent stores conversation in memory"
+          component: "AgentCore Memory"
+          storage: "USER/ASSISTANT message pair"
+          processing: "Asynchronous (20-30 seconds)"
+        
+        - step: 9
+          action: "Response returned to user"
+          format: "Text response with tool results incorporated"
+          latency: "2-5 seconds typical"
+
+
+    memory_flow:
+      description: "How conversation data flows through memory system"
+      steps:
+        - step: 1
+          action: "Conversation turn stored as event"
+          format: "[('user message', 'USER'), ('assistant response', 'ASSISTANT')]"
+          storage: "DynamoDB via AgentCore Memory API"
+        
+        - step: 2
+          action: "AgentCore Memory processes asynchronously"
+          latency: "20-30 seconds"
+          processing: "Extract preferences, facts, generate summaries"
+        
+        - step: 3
+          action: "Preferences extracted to preferences namespace"
+          example: "User prefers email updates"
+          namespace: "app/{actorId}/preferences"
+        
+        - step: 4
+          action: "Facts embedded to semantic namespace"
+          example: "Order ORD-001 is a laptop purchased 15 days ago"
+          namespace: "app/{actorId}/semantic"
+          embedding: "Vector embeddings for semantic search"
+        
+        - step: 5
+          action: "Summary generated to summary namespace"
+          example: "Agent helped customer check return eligibility"
+          namespace: "app/{actorId}/{sessionId}/summary"
+        
+        - step: 6
+          action: "Next request retrieves relevant memories"
+          query: "Semantic search by namespace and text"
+          top_k: "2-3 most relevant items per namespace"
+        
+        - step: 7
+          action: "Context injected into agent prompt"
+          usage: "Agent uses historical context for personalized responses"
+    
+    gateway_flow:
+      description: "How external API calls flow through gateway"
+      steps:
+        - step: 1
+          action: "Agent decides to call gateway tool"
+          example: "lookup_order for order ID"
+          reasoning: "Model determines tool is needed"
+        
+        - step: 2
+          action: "MCP client obtains OAuth token from Cognito"
+          method: "Client Credentials Grant"
+          caching: "Token cached for duration of agent execution"
+        
+        - step: 3
+          action: "MCP request sent to Gateway with bearer token"
+          protocol: "Model Context Protocol (MCP)"
+          authentication: "JWT bearer token in Authorization header"
+        
+        - step: 4
+          action: "Gateway validates token and invokes Lambda"
+          validation: "Custom JWT authorizer checks token"
+          authorization: "Scopes checked (gateway-api/read, gateway-api/write)"
+        
+        - step: 5
+          action: "Lambda processes request"
+          function: "OrderLookupFunction"
+          data_source: "Mock database (3 sample orders)"
+        
+        - step: 6
+          action: "Response returned through gateway to agent"
+          format: "JSON with order details"
+        
+        - step: 7
+          action: "Agent incorporates data into response"
+          usage: "Order details used for eligibility check or refund calculation"
+
+
+# ==============================================================================
+# ASSUMPTIONS AND CONSTRAINTS
+# ==============================================================================
+
+assumptions:
+  
+  deployment:
+    - assumption: "Single AWS region (us-west-2) is sufficient"
+      rationale: "Internal tool with low traffic, all users in same timezone"
+      risk: "Regional outage affects all users"
+    
+    - assumption: "Low traffic (<100 requests/day) for foreseeable future"
+      rationale: "Small support team (5-10 agents), internal use only"
+      impact: "Cost optimization prioritized over high-scale performance"
+    
+    - assumption: "Business hours availability (99.5%) is acceptable"
+      rationale: "Support agents work 8am-8pm PT, Mon-Fri"
+      impact: "No 24/7 on-call support required"
+    
+    - assumption: "Cold start latency (2-3 seconds) is acceptable"
+      rationale: "Internal tool, agents can wait a few seconds"
+      impact: "No need for provisioned concurrency or warm pools"
+  
+  data:
+    - assumption: "Mock order data is sufficient for testing"
+      rationale: "Production integration with real order system is future work"
+      limitation: "Only 3 sample orders available (ORD-001, ORD-002, ORD-003)"
+    
+    - assumption: "Knowledge base contains current, accurate policies"
+      rationale: "Policies manually updated by operations team"
+      risk: "Outdated policies lead to incorrect information"
+    
+    - assumption: "Memory retention of 30 days is sufficient"
+      rationale: "Most return inquiries resolved within days"
+      impact: "Older conversation history not available"
+    
+    - assumption: "Actor-based isolation is sufficient for multi-tenancy"
+      rationale: "Each support agent has unique actor_id"
+      security: "No cross-agent data leakage"
+  
+  business_rules:
+    - assumption: "Return windows are fixed (90 days electronics, 30 days other)"
+      rationale: "Company policy is stable"
+      change_impact: "Code changes required if policies change"
+    
+    - assumption: "Restocking fees are fixed (15% opened, 20% used)"
+      rationale: "Standard company policy"
+      change_impact: "Code changes required if fees change"
+    
+    - assumption: "Defective items always get full refund"
+      rationale: "Consumer protection and company policy"
+      enforcement: "Hardcoded in calculate_refund_amount tool"
+
+
+  technical:
+    - assumption: "AWS services (Bedrock, AgentCore) are reliable"
+      rationale: "Managed services with high availability SLAs"
+      mitigation: "Graceful degradation when services unavailable"
+    
+    - assumption: "OAuth token refresh is handled by Cognito"
+      rationale: "Standard OAuth 2.0 flow"
+      impact: "No manual token refresh logic needed"
+    
+    - assumption: "Python 3.12 is stable and supported"
+      rationale: "Latest stable Python version"
+      risk: "Breaking changes in future Python versions"
+    
+    - assumption: "Docker container size is acceptable"
+      rationale: "Base image + dependencies < 500MB"
+      impact: "Cold start time includes image pull"
+
+constraints:
+  
+  technical_constraints:
+    - constraint: "Single region deployment (us-west-2)"
+      reason: "Cost optimization, low traffic"
+      limitation: "No geographic redundancy"
+    
+    - constraint: "Serverless architecture (AgentCore Runtime)"
+      reason: "Cost efficiency, auto-scaling"
+      limitation: "Cold start latency, execution time limits"
+    
+    - constraint: "Claude Sonnet 4.5 model only"
+      reason: "Balance of performance and cost"
+      limitation: "No model fallback or A/B testing"
+    
+    - constraint: "Mock order data (3 sample orders)"
+      reason: "No production order system integration yet"
+      limitation: "Cannot test with real customer orders"
+    
+    - constraint: "15-minute session timeout"
+      reason: "AgentCore Runtime default"
+      limitation: "Long-running conversations may timeout"
+    
+    - constraint: "Memory processing latency (20-30 seconds)"
+      reason: "Asynchronous processing by AgentCore Memory"
+      limitation: "Preferences not immediately available in same session"
+  
+  business_constraints:
+    - constraint: "Internal tool only (not customer-facing)"
+      reason: "Support agent workflow, not self-service"
+      limitation: "Customers cannot directly access agent"
+    
+    - constraint: "Business hours support only"
+      reason: "Support team works 8am-8pm PT, Mon-Fri"
+      limitation: "No 24/7 availability"
+    
+    - constraint: "Manual policy updates"
+      reason: "No automated policy ingestion pipeline"
+      limitation: "Knowledge base may become outdated"
+    
+    - constraint: "Fixed return windows and fees"
+      reason: "Hardcoded in business logic"
+      limitation: "Code changes required for policy updates"
+
+
+  regulatory_constraints:
+    - constraint: "Data retention limited to 30 days"
+      reason: "Privacy and compliance"
+      impact: "Historical data not available beyond 30 days"
+    
+    - constraint: "No PII in logs"
+      reason: "Privacy and security"
+      impact: "Debugging may be limited without customer details"
+    
+    - constraint: "Actor-based isolation required"
+      reason: "Data privacy between support agents"
+      impact: "Cannot share conversation history across agents"
+
+# ==============================================================================
+# RISKS AND OPEN QUESTIONS
+# ==============================================================================
+
+risks_and_open_questions:
+  
+  risks:
+    
+    - id: RISK-001
+      category: "Correctness"
+      description: "Incorrect refund calculations could cost company money"
+      likelihood: "Low (deterministic logic, tested)"
+      impact: "High (financial loss, customer dissatisfaction)"
+      mitigation:
+        - "100% unit test coverage for refund calculations"
+        - "Property-based tests verify mathematical properties"
+        - "Human agent reviews amount before communicating to customer"
+        - "All calculations logged for audit trail"
+      status: "Mitigated"
+    
+    - id: RISK-002
+      category: "Availability"
+      description: "Single region deployment vulnerable to regional outage"
+      likelihood: "Low (AWS us-west-2 is highly available)"
+      impact: "High (all support agents unable to work)"
+      mitigation:
+        - "Graceful degradation: agents can work without some features"
+        - "Manual fallback: agents can calculate refunds manually"
+        - "Future: Multi-region deployment if criticality increases"
+      status: "Accepted (low traffic, internal tool)"
+    
+    - id: RISK-003
+      category: "Data Quality"
+      description: "Outdated knowledge base leads to incorrect policy information"
+      likelihood: "Medium (manual updates, no automation)"
+      impact: "Medium (incorrect information, customer complaints)"
+      mitigation:
+        - "Regular policy review process (monthly)"
+        - "Version control for policy documents"
+        - "Agent training to verify critical information"
+        - "Future: Automated policy ingestion pipeline"
+      status: "Partially mitigated"
+
+
+    - id: RISK-004
+      category: "Security"
+      description: "OAuth token compromise could allow unauthorized access"
+      likelihood: "Low (tokens stored securely, short-lived)"
+      impact: "High (unauthorized gateway access, data breach)"
+      mitigation:
+        - "Tokens stored in environment variables, never in code"
+        - "Short token expiration (1 hour typical)"
+        - "Scoped access (gateway-api/read, gateway-api/write only)"
+        - "CloudWatch logs track all access with actor_id"
+        - "Regular security audits"
+      status: "Mitigated"
+    
+    - id: RISK-005
+      category: "Cost"
+      description: "Unexpected traffic spike could increase costs significantly"
+      likelihood: "Low (internal tool, controlled access)"
+      impact: "Medium (budget overrun)"
+      mitigation:
+        - "CloudWatch alarms for request volume"
+        - "AWS Cost Explorer monitors daily costs"
+        - "Serverless architecture scales down automatically"
+        - "Rate limiting can be added if needed"
+      status: "Monitored"
+    
+    - id: RISK-006
+      category: "Performance"
+      description: "Memory processing latency (20-30 seconds) affects user experience"
+      likelihood: "High (inherent to AgentCore Memory)"
+      impact: "Low (preferences not immediately available)"
+      mitigation:
+        - "User expectations set: preferences available in next session"
+        - "Agent can manually note preferences in current session"
+        - "Future: Explore caching strategies"
+      status: "Accepted (design limitation)"
+    
+    - id: RISK-007
+      category: "Integration"
+      description: "Mock order data limits testing and production readiness"
+      likelihood: "High (current state)"
+      impact: "High (cannot test with real orders)"
+      mitigation:
+        - "Comprehensive testing with mock data"
+        - "Clear documentation of mock data limitations"
+        - "Production integration planned as future work"
+        - "Lambda function designed for easy data source swap"
+      status: "Accepted (MVP limitation)"
+
+
+  open_questions:
+    
+    - id: OQ-001
+      category: "Business"
+      question: "Should the agent be customer-facing in the future?"
+      context: |
+        Currently internal tool for support agents. Could be exposed to
+        customers for self-service returns/refunds.
+      implications:
+        - "Higher traffic volume (100x-1000x increase)"
+        - "Stricter latency requirements (sub-second)"
+        - "Enhanced security and compliance requirements"
+        - "Multi-region deployment for global customers"
+        - "24/7 availability requirement"
+      decision_needed: "Product roadmap decision"
+    
+    - id: OQ-002
+      category: "Technical"
+      question: "When should we integrate with real order management system?"
+      context: |
+        Currently using mock data (3 sample orders). Production requires
+        integration with actual order database.
+      implications:
+        - "Lambda function needs database connection"
+        - "VPC configuration for private database access"
+        - "Increased latency for database queries"
+        - "Error handling for database failures"
+        - "Data synchronization and consistency"
+      decision_needed: "Engineering prioritization"
+    
+    - id: OQ-003
+      category: "Business"
+      question: "How should we handle policy changes?"
+      context: |
+        Return windows and restocking fees are hardcoded. Policy changes
+        require code updates and redeployment.
+      implications:
+        - "Option 1: Keep hardcoded (simple, requires deployment)"
+        - "Option 2: Configuration file (flexible, no deployment)"
+        - "Option 3: Database-driven (most flexible, more complex)"
+        - "Option 4: Admin UI for policy management"
+      decision_needed: "Product and engineering decision"
+    
+    - id: OQ-004
+      category: "Technical"
+      question: "Should we implement caching for knowledge base queries?"
+      context: |
+        Policy documents rarely change but are queried frequently.
+        Caching could reduce latency and costs.
+      implications:
+        - "Reduced Bedrock KB costs"
+        - "Faster response times"
+        - "Cache invalidation complexity"
+        - "Stale data risk"
+      decision_needed: "Performance vs. complexity tradeoff"
+
+
+    - id: OQ-005
+      category: "Observability"
+      question: "What business metrics should we track?"
+      context: |
+        Currently tracking technical metrics (latency, errors). Should we
+        track business KPIs?
+      potential_metrics:
+        - "Return approval rate (% of returns approved)"
+        - "Average refund amount"
+        - "Most common return reasons"
+        - "Policy questions asked most frequently"
+        - "Agent productivity (requests handled per hour)"
+        - "Customer satisfaction (if customer-facing)"
+      implications:
+        - "Additional logging and analytics"
+        - "Dashboard development"
+        - "Data warehouse integration"
+      decision_needed: "Product and operations decision"
+    
+    - id: OQ-006
+      category: "Security"
+      question: "Should we implement rate limiting?"
+      context: |
+        Currently no rate limiting. Low traffic makes it unnecessary, but
+        could prevent abuse or runaway costs.
+      implications:
+        - "Prevents cost overruns from abuse"
+        - "Adds complexity to architecture"
+        - "May impact legitimate high-volume usage"
+        - "Requires monitoring and alerting"
+      decision_needed: "Security vs. simplicity tradeoff"
+    
+    - id: OQ-007
+      category: "Technical"
+      question: "Should we support multiple LLM models?"
+      context: |
+        Currently only Claude Sonnet 4.5. Could add fallback models or
+        allow model selection for cost/performance tradeoffs.
+      implications:
+        - "Increased resilience (fallback if primary model unavailable)"
+        - "Cost optimization (cheaper models for simple queries)"
+        - "A/B testing for model performance"
+        - "Increased complexity in configuration and testing"
+      decision_needed: "Engineering decision based on reliability needs"
+    
+    - id: OQ-008
+      category: "Business"
+      question: "What is the long-term vision for agent capabilities?"
+      context: |
+        Current capabilities: eligibility, refunds, policies, order lookup.
+        What additional capabilities should we add?
+      potential_additions:
+        - "Initiate return shipping labels"
+        - "Process refunds automatically (with approval workflow)"
+        - "Handle exchanges (not just returns)"
+        - "Integrate with CRM for customer history"
+        - "Proactive notifications (return window expiring)"
+        - "Multi-language support"
+      decision_needed: "Product roadmap and prioritization"
+
+
+# ==============================================================================
+# DEPLOYMENT AND OPERATIONS
+# ==============================================================================
+
+deployment:
+  
+  current_state:
+    status: "Production-ready, deployed to AgentCore Runtime"
+    agent_arn: "arn:aws:bedrock-agentcore:us-west-2:943657149005:runtime/returns_refunds_agent-Gig9iD6daP"
+    deployment_date: "2026-03-22 (approximate)"
+    version: "1.0.0"
+  
+  infrastructure_setup:
+    description: "Python scripts to create AWS resources"
+    location: "src/infrastructure/"
+    scripts:
+      - number: "03"
+        name: "create_memory.py"
+        purpose: "Create AgentCore Memory resource with strategies"
+        output: "memory_config.json"
+      
+      - number: "04"
+        name: "seed_memory.py"
+        purpose: "Seed memory with sample conversation data"
+        output: "Memory events created"
+      
+      - number: "08"
+        name: "create_cognito.py"
+        purpose: "Create Cognito User Pool for OAuth authentication"
+        output: "cognito_config.json"
+      
+      - number: "09"
+        name: "create_gateway_role.py"
+        purpose: "Create IAM role for AgentCore Gateway"
+        output: "gateway_role_config.json"
+      
+      - number: "10"
+        name: "create_lambda.py"
+        purpose: "Create Lambda function for order lookup"
+        output: "lambda_config.json"
+      
+      - number: "11"
+        name: "create_gateway.py"
+        purpose: "Create AgentCore Gateway with OAuth"
+        output: "gateway_config.json"
+      
+      - number: "12"
+        name: "add_lambda_to_gateway.py"
+        purpose: "Add Lambda target to gateway"
+        output: "Gateway target created"
+      
+      - number: "13"
+        name: "list_gateway_targets.py"
+        purpose: "List all gateway targets"
+        output: "Console output"
+      
+      - number: "16"
+        name: "create_runtime_role.py"
+        purpose: "Create IAM execution role for AgentCore Runtime"
+        output: "runtime_execution_role_config.json"
+    
+    notes:
+      - "Scripts numbered non-sequentially (03, 04, 08-13, 16)"
+      - "Knowledge Base setup (01) not scripted - KB created externally"
+      - "All scripts save configuration to JSON files"
+      - "Scripts are idempotent where possible"
+  
+  deployment_process:
+    method: "Automated via Python scripts"
+    duration: "5-10 minutes"
+    steps:
+      - "Load configuration files (memory, gateway, cognito, roles, KB)"
+      - "Configure runtime settings (entrypoint, execution role, auth)"
+      - "Set environment variables (MEMORY_ID, GATEWAY_URL, etc.)"
+      - "Create CodeBuild project"
+      - "Build Docker container"
+      - "Push to Amazon ECR"
+      - "Deploy to AgentCore Runtime"
+      - "Wait for READY status"
+    
+    scripts:
+      - "scripts/19_deploy_agent.py - Main deployment script"
+      - "scripts/20_check_status.py - Monitor deployment status"
+      - "scripts/21_invoke_agent.py - Test deployed agent"
+      - "scripts/22_get_dashboard.py - Get observability dashboard URL"
+      - "scripts/23_get_logs_info.py - Get CloudWatch logs information"
+  
+  rollback:
+    method: "Redeploy previous container image from ECR"
+    duration: "5-10 minutes"
+    process: "Keep previous images in ECR, redeploy if issues detected"
+  
+  monitoring:
+    health_checks: "AgentCore Runtime built-in health monitoring"
+    alerts:
+      - "CloudWatch alarms for error rate >5%"
+      - "CloudWatch alarms for latency >10 seconds"
+      - "AWS Cost Explorer alerts for daily cost >$20"
+    dashboards:
+      - "CloudWatch GenAI Observability Dashboard"
+      - "Custom business metrics dashboard (future)"
+
+operations:
+  
+  maintenance:
+    policy_updates:
+      frequency: "Monthly or as needed"
+      process: "Update knowledge base documents, no code changes"
+      validation: "Test queries after update"
+    
+    dependency_updates:
+      frequency: "Quarterly"
+      process: "Update requirements.txt, redeploy"
+      testing: "Run full test suite before deployment"
+    
+    infrastructure_updates:
+      frequency: "As needed"
+      process: "Update IAM roles, Cognito, Gateway via scripts"
+      validation: "Test authentication and authorization"
+  
+  troubleshooting:
+    common_issues:
+      - issue: "Agent not responding"
+        diagnosis: "Check AgentCore Runtime status"
+        resolution: "Redeploy if status is FAILED"
+      
+      - issue: "Gateway tools not working"
+        diagnosis: "Check OAuth token, Gateway status, Lambda logs"
+        resolution: "Verify Cognito configuration, check Lambda errors"
+      
+      - issue: "Memory not retrieving context"
+        diagnosis: "Check memory processing (20-30 second delay)"
+        resolution: "Wait for async processing, verify memory_id"
+      
+      - issue: "Incorrect refund calculations"
+        diagnosis: "Check input parameters, review business rules"
+        resolution: "Verify item_condition and return_reason values"
+    
+    log_access:
+      - "CloudWatch Logs: /aws/bedrock-agentcore/runtimes/*"
+      - "Real-time tailing: aws logs tail <log-group> --follow"
+      - "Script: scripts/23_get_logs_info.py"
+    
+    support_contacts:
+      - "AWS Support: For AgentCore, Bedrock, infrastructure issues"
+      - "Internal DevOps: For deployment and configuration issues"
+      - "Product Team: For business logic and policy questions"
+
+# ==============================================================================
+# TESTING
+# ==============================================================================
+
+testing:
+  
+  current_coverage:
+    unit_tests: "Custom tools tested in isolation"
+    integration_tests: "Agent tested with real services"
+    end_to_end_tests: "Full user flows tested via Streamlit UI"
+    property_based_tests: "Planned for refund calculations"
+  
+  test_scripts:
+    - "src/tests/02_test_agent.py - Basic agent with custom tools"
+    - "src/tests/05_test_memory.py - Memory retrieval"
+    - "src/tests/07_test_memory_agent.py - Agent with memory"
+    - "src/tests/15_test_full_agent.py - Full agent with all features"
+  
+  test_data:
+    mock_orders:
+      - "ORD-001: Dell XPS 15 Laptop (15 days old, eligible)"
+      - "ORD-002: iPhone 13 Pro (45 days old, expired)"
+      - "ORD-003: Samsung Galaxy Tab S8 (5 days old, defective)"
+    
+    test_scenarios:
+      - "Return within window (should approve)"
+      - "Return outside window (should deny)"
+      - "Non-returnable category (should deny)"
+      - "Defective item (should approve with full refund)"
+      - "Used item (should calculate 80% refund with 20% fee)"
+
+---
+# End of specification
