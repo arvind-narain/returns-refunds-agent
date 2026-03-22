@@ -1,0 +1,857 @@
+---
+# Returns & Refunds Agent - V2 Specification
+# Realistic 1-2 Week Implementation Plan
+# Generated: 2026-03-22
+# Status: Planning (builds on current implementation)
+
+metadata:
+  spec_version: "2.0.0"
+  created_date: "2026-03-22"
+  status: "planning"
+  estimated_timeline: "1-2 weeks"
+  deployment_region: "us-west-2"
+  builds_on: "returns-agent-current.yaml (v1.0.0)"
+
+overview:
+  purpose: |
+    Enhanced AI-powered returns and refunds assistant with configurable per-merchant
+    policies, human-in-the-loop approval for high-risk refunds, and a basic dashboard
+    for monitoring and analytics. Builds directly on the current implementation.
+  
+  target_users:
+    - "Internal customer support agents (primary users)"
+    - "Support managers (approval workflow)"
+    - "Operations team (dashboard monitoring)"
+  
+  deployment_model: "Serverless on AWS AgentCore Runtime (existing)"
+  
+  v2_enhancements:
+    - "Configurable policies via YAML files (no hardcoded rules)"
+    - "Human approval workflow for high-risk refunds"
+    - "Basic web dashboard for monitoring and analytics"
+    - "Enhanced decision logging with DynamoDB"
+    - "Policy versioning and audit trail"
+  
+  scope:
+    in_scope:
+      - "Policy engine with YAML-based configuration"
+      - "Risk-based routing (auto-approve vs. manual review)"
+      - "Human approval queue with SLA tracking"
+      - "Basic Streamlit dashboard (monitoring, approvals, analytics)"
+      - "Decision logging to DynamoDB"
+      - "Policy versioning and change tracking"
+    
+    out_of_scope:
+      - "Multi-tenant support (single merchant only)"
+      - "ML-based fraud detection (rule-based only)"
+      - "Customer-facing portal (internal tool only)"
+      - "Multi-region deployment (us-west-2 only)"
+      - "Advanced analytics (basic metrics only)"
+      - "Payment gateway integration (mock refunds)"
+
+  current_scale:
+    traffic_level: "Low (internal tool, <200 requests/day)"
+    concurrent_users: "10-20 support agents + managers"
+    geographic_scope: "Single region (us-west-2)"
+    availability_requirement: "Business hours (99.5% uptime)"
+
+
+# ==============================================================================
+# FUNCTIONAL REQUIREMENTS (V2 ENHANCEMENTS)
+# ==============================================================================
+
+functional_requirements:
+  
+  # Policy Engine (NEW)
+  policy_engine:
+    
+    - id: FR-PE-001
+      name: "YAML-Based Policy Configuration"
+      description: |
+        Replace hardcoded business rules with YAML-based policy files stored
+        in the policies/ folder. Support multiple merchant policies.
+      
+      policy_structure:
+        - policy_id: "string (e.g., 'default-policy-v1')"
+        - policy_name: "string"
+        - version: "string (semantic versioning)"
+        - effective_date: "date (YYYY-MM-DD)"
+        - return_windows: "dict (category -> days)"
+        - non_returnable_categories: "list of strings"
+        - refund_rules: "nested dict (reason -> condition -> percentages)"
+      
+      storage_location: "policies/*.yaml"
+      
+      validation:
+        - "Schema validation against policies/schema.json"
+        - "Startup validation (fail fast if invalid)"
+        - "Runtime validation before policy application"
+      
+      example_policies:
+        - "policies/default_policy.yaml (already exists)"
+        - "policies/electronics_merchant.yaml (new)"
+        - "policies/clothing_merchant.yaml (new)"
+      
+      business_rules:
+        - "Policy selected by merchant_id (default if not specified)"
+        - "Return windows checked against purchase_date"
+        - "Refund calculations use policy-defined percentages"
+        - "Non-returnable categories enforced"
+    
+    - id: FR-PE-002
+      name: "Policy Versioning and Audit Trail"
+      description: |
+        Track policy changes over time with version history. Log which policy
+        version was used for each decision.
+      
+      versioning_strategy:
+        - "Semantic versioning (major.minor.patch)"
+        - "Git-based versioning (commit hash tracked)"
+        - "Effective date determines active version"
+      
+      audit_requirements:
+        - "Log policy_id and version with each decision"
+        - "Store policy snapshot in decision log"
+        - "Track policy changes in Git history"
+        - "Dashboard shows policy change timeline"
+      
+      implementation:
+        - "Policy loader reads from policies/ folder"
+        - "Policy metadata stored in DynamoDB"
+        - "Decision log includes policy_version field"
+
+
+  # Human Approval Workflow (NEW)
+  approval_workflow:
+    
+    - id: FR-AW-001
+      name: "Risk-Based Routing"
+      description: |
+        Automatically route high-risk refunds to human approval queue.
+        Low-risk refunds are auto-approved.
+      
+      risk_thresholds:
+        - auto_approve: "refund_amount < $100 AND days_since_purchase < 30"
+        - manual_review: "refund_amount >= $100 OR days_since_purchase >= 30"
+        - critical_review: "refund_amount >= $500 (requires manager approval)"
+      
+      routing_logic:
+        - "Calculate risk score based on amount and age"
+        - "Auto-approve if low risk"
+        - "Add to approval queue if high risk"
+        - "Notify approvers via dashboard"
+      
+      implementation:
+        - "Risk scoring function in policy_engine.py"
+        - "Approval queue stored in DynamoDB"
+        - "Agent tool: request_approval(return_id, reason)"
+    
+    - id: FR-AW-002
+      name: "Approval Queue Management"
+      description: |
+        DynamoDB-based queue for pending approvals with SLA tracking.
+        Support managers can approve/deny via dashboard.
+      
+      queue_structure:
+        table: "approval_queue"
+        partition_key: "status (pending, approved, denied)"
+        sort_key: "created_at (timestamp)"
+        attributes:
+          - approval_id: "UUID"
+          - return_id: "UUID"
+          - customer_id: "string"
+          - order_id: "string"
+          - refund_amount: "decimal"
+          - risk_score: "integer (0-100)"
+          - reason: "string"
+          - created_at: "timestamp"
+          - sla_deadline: "timestamp (created_at + 4 hours)"
+          - status: "pending, approved, denied, expired"
+          - approved_by: "user_id (optional)"
+          - approved_at: "timestamp (optional)"
+          - denial_reason: "string (optional)"
+      
+      sla_tracking:
+        - standard_review: "4 hours"
+        - critical_review: "1 hour"
+        - expired_items: "Auto-escalate or auto-deny"
+
+
+  # Dashboard (NEW)
+  dashboard:
+    
+    - id: FR-DB-001
+      name: "Streamlit Monitoring Dashboard"
+      description: |
+        Basic web dashboard for monitoring agent activity, approving requests,
+        and viewing analytics. Built with Streamlit.
+      
+      pages:
+        - "Home: Overview metrics and recent activity"
+        - "Approvals: Pending approval queue with actions"
+        - "Analytics: Charts and metrics"
+        - "Decisions: Searchable decision log"
+        - "Policies: View and compare policies"
+      
+      home_page:
+        metrics:
+          - "Total returns today/week/month"
+          - "Auto-approval rate"
+          - "Manual approval rate"
+          - "Average refund amount"
+          - "Pending approvals count"
+          - "SLA breach count"
+        
+        recent_activity:
+          - "Last 10 decisions (table)"
+          - "Last 5 approvals (table)"
+          - "Last 5 denials (table)"
+
+
+# ==============================================================================
+# MIGRATION PLAN FROM CURRENT (V1 -> V2)
+# ==============================================================================
+
+migration_plan_from_current:
+  
+  overview: |
+    Step-by-step migration from v1 (current) to v2. Designed to minimize
+    disruption and allow incremental rollout.
+  
+  prerequisites:
+    - "V1 agent deployed and operational"
+    - "All v1 tests passing"
+    - "AWS credentials configured"
+    - "Git repository up to date"
+  
+  step_1_setup_infrastructure:
+    description: "Create new DynamoDB tables"
+    
+    actions:
+      - "Run: python infrastructure/create_decision_log_table.py"
+      - "Run: python infrastructure/create_approval_queue_table.py"
+      - "Verify tables created in AWS Console"
+      - "Test table access with boto3"
+    
+    validation:
+      - "Tables exist in DynamoDB"
+      - "Correct partition/sort keys"
+      - "GSIs created"
+      - "On-demand billing enabled"
+    
+    rollback:
+      - "Delete tables if needed"
+      - "No impact on v1 agent"
+  
+  step_2_add_policy_engine:
+    description: "Add policy engine without breaking existing agent"
+    
+    actions:
+      - "Create src/agents/policy_engine.py"
+      - "Add policies/electronics_merchant.yaml"
+      - "Add policies/clothing_merchant.yaml"
+      - "Update requirements.txt (add PyYAML, jsonschema)"
+      - "Run unit tests: pytest tests/test_policy_engine.py"
+    
+    validation:
+      - "Policy engine loads policies correctly"
+      - "Schema validation works"
+      - "Eligibility checks match v1 behavior"
+      - "Refund calculations match v1 behavior"
+    
+    rollback:
+      - "Remove policy_engine.py"
+      - "Revert requirements.txt"
+      - "V1 agent still works"
+  
+  step_3_add_approval_workflow:
+    description: "Add human approval workflow"
+    
+    actions:
+      - "Create src/agents/approval_queue.py"
+      - "Add request_approval tool to agent"
+      - "Update agent system prompt"
+      - "Test approval workflow end-to-end"
+    
+    validation:
+      - "High-risk returns added to queue"
+      - "Low-risk returns auto-approved"
+      - "SLA tracking works correctly"
+    
+    rollback:
+      - "Remove approval_queue.py"
+      - "Remove request_approval tool"
+      - "V1 agent still works"
+  
+  step_4_build_dashboard:
+    description: "Build Streamlit dashboard"
+    
+    actions:
+      - "Create src/ui/dashboard_app.py"
+      - "Implement home, approvals, analytics pages"
+      - "Add authentication (Streamlit secrets)"
+      - "Deploy dashboard (Streamlit Cloud or EC2)"
+    
+    validation:
+      - "Dashboard loads without errors"
+      - "Metrics display correctly"
+      - "Approval actions work"
+      - "Authentication works"
+    
+    rollback:
+      - "Stop dashboard"
+      - "V1 agent still works"
+  
+  step_5_cutover:
+    description: "Switch to V2 agent"
+    
+    actions:
+      - "Deploy V2 agent to AgentCore Runtime"
+      - "Monitor for 24 hours"
+      - "Verify all features working"
+      - "Decommission V1 agent"
+    
+    validation:
+      - "All tests pass"
+      - "No errors in logs"
+      - "Dashboard shows activity"
+      - "Approvals working"
+    
+    rollback:
+      - "Redeploy V1 agent"
+      - "Keep V2 infrastructure for retry"
+  
+  total_timeline:
+    optimistic: "7 days (1 week)"
+    realistic: "10-12 days (1.5-2 weeks)"
+    pessimistic: "14 days (2 weeks)"
+  
+  risks:
+    - risk: "DynamoDB schema changes"
+      mitigation: "Test schema thoroughly before deployment"
+    
+    - risk: "Dashboard performance with large datasets"
+      mitigation: "Implement pagination, limit query results"
+    
+    - risk: "Policy validation edge cases"
+      mitigation: "Comprehensive unit tests, schema validation"
+    
+    - risk: "Agent redeployment issues"
+      mitigation: "Test locally first, use existing deployment scripts"
+
+    
+    - id: FR-PE-002
+      name: "Policy Versioning and Audit Trail"
+      description: |
+        Track policy changes over time with version history. Log which policy
+        version was used for each decision.
+      
+      versioning_strategy:
+        - "Semantic versioning (major.minor.patch)"
+        - "Git-based versioning (commit hash tracked)"
+        - "Effective date determines active version"
+      
+      audit_requirements:
+        - "Log policy_id and version with each decision"
+        - "Store policy snapshot in decision log"
+        - "Track policy changes in Git history"
+        - "Dashboard shows policy change timeline"
+      
+      implementation:
+        - "Policy loader reads from policies/ folder"
+        - "Policy metadata stored in DynamoDB"
+        - "Decision log includes policy_version field"
+    
+    - id: FR-PE-003
+      name: "Policy Evaluation Engine"
+      description: |
+        Runtime engine that evaluates policies against return requests.
+        Replaces hardcoded logic in custom tools.
+      
+      inputs:
+        - policy: "Loaded YAML policy object"
+        - request_data: "purchase_date, category, price, condition, reason"
+      
+      outputs:
+        - eligible: "boolean"
+        - reason: "string (policy-based explanation)"
+        - refund_amount: "decimal"
+        - refund_breakdown: "dict (percentage, fees, shipping)"
+        - policy_version: "string"
+      
+      evaluation_logic:
+        - "Check non-returnable categories first"
+        - "Calculate days_since_purchase"
+        - "Check category-specific return window"
+        - "Apply refund rules based on condition and reason"
+        - "Ensure non-negative refund amounts"
+      
+      error_handling:
+        - "Invalid policy: Log error, use default policy"
+        - "Missing category: Use default return window"
+        - "Invalid condition/reason: Return error to agent"
+
+
+  # Human Approval Workflow (NEW)
+  approval_workflow:
+    
+    - id: FR-AW-001
+      name: "Risk-Based Routing"
+      description: |
+        Automatically route high-risk refunds to human approval queue.
+        Low-risk refunds are auto-approved.
+      
+      risk_thresholds:
+        - auto_approve: "refund_amount < $100 AND days_since_purchase < 30"
+        - manual_review: "refund_amount >= $100 OR days_since_purchase >= 30"
+        - critical_review: "refund_amount >= $500 (requires manager approval)"
+
+      
+      routing_logic:
+        - "Calculate risk score based on amount and age"
+        - "Auto-approve if low risk"
+        - "Add to approval queue if high risk"
+        - "Notify approvers via dashboard"
+      
+      implementation:
+        - "Risk scoring function in policy_engine.py"
+        - "Approval queue stored in DynamoDB"
+        - "Agent tool: request_approval(return_id, reason)"
+    
+    - id: FR-AW-002
+      name: "Approval Queue Management"
+      description: |
+        DynamoDB-based queue for pending approvals with SLA tracking.
+        Support managers can approve/deny via dashboard.
+      
+      queue_structure:
+        table: "approval_queue"
+        partition_key: "status (pending, approved, denied)"
+        sort_key: "created_at (timestamp)"
+        attributes:
+          - approval_id: "UUID"
+          - return_id: "UUID"
+          - customer_id: "string"
+          - order_id: "string"
+          - refund_amount: "decimal"
+          - risk_score: "integer (0-100)"
+          - reason: "string"
+          - created_at: "timestamp"
+          - sla_deadline: "timestamp (created_at + 4 hours)"
+          - status: "pending, approved, denied, expired"
+          - approved_by: "user_id (optional)"
+          - approved_at: "timestamp (optional)"
+          - denial_reason: "string (optional)"
+      
+      sla_tracking:
+        - standard_review: "4 hours"
+        - critical_review: "1 hour"
+        - expired_items: "Auto-escalate or auto-deny"
+      
+      operations:
+        - add_to_queue(return_data): "Add new approval request"
+        - get_pending_approvals(): "List pending items"
+        - approve_request(approval_id, user_id): "Approve and process refund"
+        - deny_request(approval_id, user_id, reason): "Deny with reason"
+        - check_sla_breaches(): "Identify expired items"
+    
+    - id: FR-AW-003
+      name: "Approval Actions"
+      description: |
+        Support managers can approve or deny requests via dashboard.
+        Decisions are logged and trigger refund processing.
+      
+      approval_flow:
+        - "Manager views pending approvals in dashboard"
+        - "Manager reviews return details and risk factors"
+        - "Manager clicks Approve or Deny button"
+        - "Decision logged to DynamoDB with user_id"
+        - "If approved: Mock refund processed, customer notified"
+        - "If denied: Denial reason recorded, customer notified"
+        - "Queue item status updated"
+      
+      denial_flow:
+        - "Manager provides denial reason (required)"
+        - "Common reasons: fraud_suspected, policy_violation, damaged_item"
+        - "Denial logged with timestamp and user_id"
+        - "Agent can retrieve denial reason for customer communication"
+
+
+  # Decision Logging (ENHANCED)
+  decision_logging:
+    
+    - id: FR-DL-001
+      name: "DynamoDB Decision Log"
+      description: |
+        Store all return decisions in DynamoDB for audit trail and analytics.
+        Replaces CloudWatch-only logging.
+
+      
+      table_structure:
+        table: "decision_log"
+        partition_key: "decision_id (UUID)"
+        sort_key: "timestamp (timestamp)"
+        attributes:
+          - decision_id: "UUID"
+          - timestamp: "timestamp"
+          - return_id: "UUID"
+          - customer_id: "string"
+          - order_id: "string"
+          - decision_type: "auto_approve, auto_deny, manual_approve, manual_deny"
+          - decided_by: "system or user_id"
+          - policy_id: "string"
+          - policy_version: "string"
+          - refund_amount: "decimal"
+          - risk_score: "integer"
+          - reason: "string"
+          - request_data: "JSON (original request)"
+          - policy_snapshot: "JSON (policy used)"
+      
+      indexes:
+        - "GSI: customer_id-timestamp (customer history)"
+        - "GSI: decision_type-timestamp (analytics)"
+        - "GSI: decided_by-timestamp (user activity)"
+      
+      operations:
+        - log_decision(decision_data): "Write to DynamoDB"
+        - get_customer_history(customer_id): "Query by GSI"
+        - get_decisions_by_type(type, start_date, end_date): "Analytics"
+        - get_user_decisions(user_id): "Audit trail"
+    
+    - id: FR-DL-002
+      name: "Decision Retrieval"
+      description: |
+        Agent can retrieve past decisions for context and customer history.
+      
+      use_cases:
+        - "Agent asks: 'Has this customer returned items before?'"
+        - "Agent asks: 'What was the refund amount for order ORD-001?'"
+        - "Agent asks: 'Show me recent manual approvals'"
+      
+      agent_tool:
+        name: "get_decision_history"
+        inputs:
+          - customer_id: "string (optional)"
+          - order_id: "string (optional)"
+          - decision_type: "string (optional)"
+          - limit: "integer (default 10)"
+        outputs:
+          - decisions: "list of decision objects"
+          - total_count: "integer"
+
+
+  # Dashboard (NEW)
+  dashboard:
+    
+    - id: FR-DB-001
+      name: "Streamlit Monitoring Dashboard"
+      description: |
+        Basic web dashboard for monitoring agent activity, approving requests,
+        and viewing analytics. Built with Streamlit.
+      
+      pages:
+        - "Home: Overview metrics and recent activity"
+        - "Approvals: Pending approval queue with actions"
+        - "Analytics: Charts and metrics"
+        - "Decisions: Searchable decision log"
+        - "Policies: View and compare policies"
+      
+      home_page:
+        metrics:
+          - "Total returns today/week/month"
+          - "Auto-approval rate"
+          - "Manual approval rate"
+          - "Average refund amount"
+          - "Pending approvals count"
+          - "SLA breach count"
+        
+        recent_activity:
+          - "Last 10 decisions (table)"
+          - "Last 5 approvals (table)"
+          - "Last 5 denials (table)"
+      
+      approvals_page:
+        features:
+          - "List pending approvals (sorted by SLA deadline)"
+          - "View return details (customer, order, amount, risk)"
+          - "Approve button (with confirmation)"
+          - "Deny button (with reason input)"
+          - "SLA countdown timer (visual indicator)"
+          - "Risk score visualization"
+        
+        actions:
+          - "Approve: Update DynamoDB, log decision, show success"
+          - "Deny: Prompt for reason, update DynamoDB, log decision"
+          - "Refresh: Reload pending approvals"
+
+      
+      analytics_page:
+        charts:
+          - "Returns over time (line chart)"
+          - "Approval rate by decision type (pie chart)"
+          - "Refund amounts distribution (histogram)"
+          - "Risk score distribution (bar chart)"
+          - "Top customers by return count (table)"
+        
+        filters:
+          - "Date range picker"
+          - "Decision type filter"
+          - "Risk level filter"
+      
+      decisions_page:
+        features:
+          - "Searchable decision log (by customer, order, date)"
+          - "Filterable by decision type, risk score"
+          - "Sortable columns"
+          - "Export to CSV"
+          - "View decision details (modal)"
+      
+      policies_page:
+        features:
+          - "List available policies"
+          - "View policy details (YAML formatted)"
+          - "Compare two policies side-by-side"
+          - "Policy change history (Git log)"
+    
+    - id: FR-DB-002
+      name: "Dashboard Authentication"
+      description: |
+        Simple authentication for dashboard access. Support agents and managers
+        have different permissions.
+      
+      authentication:
+        method: "Streamlit secrets-based (simple username/password)"
+        users:
+          - role: "agent"
+            permissions: ["view_metrics", "view_decisions"]
+          - role: "manager"
+            permissions: ["view_metrics", "view_decisions", "approve_requests", "deny_requests"]
+        
+        implementation:
+          - "Streamlit secrets.toml for user credentials"
+          - "Session state for login tracking"
+          - "Role-based UI rendering"
+      
+      security:
+        - "HTTPS only (via Streamlit Cloud or reverse proxy)"
+        - "Session timeout after 30 minutes"
+        - "Audit log for all approval actions"
+
+
+# ==============================================================================
+# NON-FUNCTIONAL REQUIREMENTS (V2)
+# ==============================================================================
+
+non_functional_requirements:
+  
+  performance:
+    latency:
+      agent_response: "2-5 seconds (same as v1)"
+      dashboard_load: "1-2 seconds for page load"
+      approval_action: "500ms for approve/deny"
+      policy_evaluation: "100ms (in-memory)"
+    
+    throughput:
+      expected_load: "<200 requests/day"
+      dashboard_users: "5-10 concurrent users"
+      approval_queue: "<50 pending items at peak"
+  
+  reliability:
+    availability: "99.5% during business hours (same as v1)"
+    
+    data_integrity:
+      - "All decisions logged to DynamoDB (no data loss)"
+      - "Policy versioning prevents accidental changes"
+      - "Approval actions are atomic (no partial updates)"
+      - "Decision log is append-only (immutable)"
+    
+    error_handling:
+      - "Invalid policy: Fall back to default policy, log error"
+      - "DynamoDB unavailable: Log to CloudWatch, retry 3 times"
+      - "Dashboard errors: Show user-friendly message, log to CloudWatch"
+  
+  security:
+    authentication:
+      - "Agent: OAuth 2.0 (existing Cognito)"
+      - "Dashboard: Streamlit secrets (username/password)"
+    
+    authorization:
+      - "Agents: Can view decisions, cannot approve"
+      - "Managers: Can approve/deny requests"
+      - "Role-based UI rendering in dashboard"
+    
+    data_protection:
+      - "DynamoDB encryption at rest (default)"
+      - "TLS 1.2+ for all connections"
+      - "No PII in CloudWatch logs"
+      - "Approval actions logged with user_id"
+  
+  observability:
+    logging:
+      - "CloudWatch Logs: Agent invocations, errors"
+      - "DynamoDB: Decision log, approval queue"
+      - "Dashboard: User actions logged to CloudWatch"
+    
+    metrics:
+      - "Total returns (by day/week/month)"
+      - "Auto-approval rate (%)"
+      - "Manual approval rate (%)"
+      - "Average refund amount ($)"
+      - "Pending approvals count"
+      - "SLA breach count"
+      - "Policy evaluation time (ms)"
+    
+    dashboards:
+      - "Streamlit dashboard (primary)"
+      - "CloudWatch GenAI Observability (existing)"
+      - "DynamoDB metrics (table performance)"
+
+
+
+# ==============================================================================
+# MIGRATION PLAN FROM CURRENT (V1 -> V2)
+# ==============================================================================
+
+migration_plan_from_current:
+  
+  overview: |
+    Step-by-step migration from v1 (current) to v2. Designed to minimize
+    disruption and allow incremental rollout.
+  
+  prerequisites:
+    - "V1 agent deployed and operational"
+    - "All v1 tests passing"
+    - "AWS credentials configured"
+    - "Git repository up to date"
+  
+  step_1_setup_infrastructure:
+    description: "Create new DynamoDB tables"
+    
+    actions:
+      - "Run: python infrastructure/create_decision_log_table.py"
+      - "Run: python infrastructure/create_approval_queue_table.py"
+      - "Verify tables created in AWS Console"
+      - "Test table access with boto3"
+    
+    validation:
+      - "Tables exist in DynamoDB"
+      - "Correct partition/sort keys"
+      - "GSIs created"
+      - "On-demand billing enabled"
+    
+    rollback:
+      - "Delete tables if needed"
+      - "No impact on v1 agent"
+  
+  step_2_add_policy_engine:
+    description: "Add policy engine without breaking existing agent"
+    
+    actions:
+      - "Create src/agents/policy_engine.py"
+      - "Add policies/electronics_merchant.yaml"
+      - "Add policies/clothing_merchant.yaml"
+      - "Update requirements.txt (add PyYAML, jsonschema)"
+      - "Run unit tests: pytest tests/test_policy_engine.py"
+    
+    validation:
+      - "Policy engine loads policies correctly"
+      - "Schema validation works"
+      - "Eligibility checks match v1 behavior"
+      - "Refund calculations match v1 behavior"
+    
+    rollback:
+      - "Remove policy_engine.py"
+      - "Revert requirements.txt"
+      - "V1 agent still works"
+  
+  step_3_add_decision_logging:
+    description: "Add decision logging to DynamoDB"
+    
+    actions:
+      - "Create src/agents/decision_logger.py"
+      - "Update agent tools to log decisions"
+      - "Test logging end-to-end"
+    
+    validation:
+      - "Decisions logged to DynamoDB"
+      - "Query functions return correct data"
+      - "No performance degradation"
+    
+    rollback:
+      - "Remove decision_logger.py"
+      - "V1 agent still works"
+  
+  step_4_add_approval_workflow:
+    description: "Add human approval workflow"
+    
+    actions:
+      - "Create src/agents/approval_queue.py"
+      - "Add request_approval tool to agent"
+      - "Update agent system prompt"
+      - "Test approval workflow end-to-end"
+    
+    validation:
+      - "High-risk returns added to queue"
+      - "Low-risk returns auto-approved"
+      - "SLA tracking works correctly"
+    
+    rollback:
+      - "Remove approval_queue.py"
+      - "Remove request_approval tool"
+      - "V1 agent still works"
+  
+  step_5_build_dashboard:
+    description: "Build Streamlit dashboard"
+    
+    actions:
+      - "Create src/ui/dashboard_app.py"
+      - "Implement home, approvals, analytics pages"
+      - "Add authentication (Streamlit secrets)"
+      - "Deploy dashboard (Streamlit Cloud or EC2)"
+    
+    validation:
+      - "Dashboard loads without errors"
+      - "Metrics display correctly"
+      - "Approval actions work"
+      - "Authentication works"
+    
+    rollback:
+      - "Stop dashboard"
+      - "V1 agent still works"
+  
+  step_6_cutover:
+    description: "Switch to V2 agent"
+    
+    actions:
+      - "Deploy V2 agent to AgentCore Runtime"
+      - "Monitor for 24 hours"
+      - "Verify all features working"
+      - "Decommission V1 agent"
+    
+    validation:
+      - "All tests pass"
+      - "No errors in logs"
+      - "Dashboard shows activity"
+      - "Approvals working"
+    
+    rollback:
+      - "Redeploy V1 agent"
+      - "Keep V2 infrastructure for retry"
+  
+  total_timeline:
+    optimistic: "7 days (1 week)"
+    realistic: "10-12 days (1.5-2 weeks)"
+    pessimistic: "14 days (2 weeks)"
+  
+  risks:
+    - risk: "DynamoDB schema changes"
+      mitigation: "Test schema thoroughly before deployment"
+    
+    - risk: "Dashboard performance with large datasets"
+      mitigation: "Implement pagination, limit query results"
+    
+    - risk: "Policy validation edge cases"
+      mitigation: "Comprehensive unit tests, schema validation"
+    
+    - risk: "Agent redeployment issues"
+      mitigation: "Test locally first, use existing deployment scripts"
