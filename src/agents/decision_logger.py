@@ -11,6 +11,7 @@ import uuid
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
+from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 
@@ -131,7 +132,9 @@ class DecisionLogger:
         # Log to DynamoDB
         if self.log_to_dynamodb:
             try:
-                self.table.put_item(Item=log_entry)
+                # Convert floats to Decimal for DynamoDB
+                dynamodb_entry = self._convert_floats_to_decimal(log_entry)
+                self.table.put_item(Item=dynamodb_entry)
                 logger.debug(f"Logged decision {decision_id} to DynamoDB")
             except Exception as e:
                 logger.error(f"Failed to log to DynamoDB: {e}")
@@ -144,6 +147,20 @@ class DecisionLogger:
             self._log_to_s3(log_entry)
         
         return decision_id
+    
+    def _convert_floats_to_decimal(self, obj: Any) -> Any:
+        """
+        Recursively convert float values to Decimal for DynamoDB compatibility.
+        DynamoDB doesn't support float types, only Decimal.
+        """
+        if isinstance(obj, float):
+            return Decimal(str(obj))
+        elif isinstance(obj, dict):
+            return {k: self._convert_floats_to_decimal(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_floats_to_decimal(item) for item in obj]
+        else:
+            return obj
     
     def _log_to_s3(self, log_entry: Dict[str, Any]):
         """Log decision to S3 (fallback storage)"""
