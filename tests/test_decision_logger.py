@@ -21,9 +21,13 @@ def test_logger_initialization():
     try:
         logger = DecisionLogger()
         print("✓ Decision logger initialized successfully")
-        print(f"  Logging enabled: {logger.enabled}")
-        print(f"  DynamoDB table: {logger.table_name}")
-        print(f"  S3 bucket: {logger.s3_bucket}")
+        print(f"  DynamoDB logging: {logger.log_to_dynamodb}")
+        print(f"  CloudWatch logging: {logger.log_to_cloudwatch}")
+        print(f"  S3 logging: {logger.log_to_s3}")
+        if logger.log_to_dynamodb:
+            print(f"  DynamoDB table: {logger.table_name}")
+        if logger.log_to_s3:
+            print(f"  S3 bucket: {logger.s3_bucket}")
         print(f"  Region: {logger.region}")
         return True
     except Exception as e:
@@ -67,12 +71,12 @@ def test_refund_logging():
     try:
         logger = get_decision_logger()
         
-        # Log a test decision
+        # Log a test decision - use 'condition' not 'item_condition'
         logger.log_refund_decision(
             order_id="TEST-ORDER-002",
             original_price=100.00,
             refund_amount=85.00,
-            item_condition="opened_unused",
+            condition="opened_unused",
             return_reason="changed_mind",
             policy_version="1.0",
             actor_id="test-actor",
@@ -95,18 +99,21 @@ def test_generic_logging():
     try:
         logger = get_decision_logger()
         
-        # Log a generic decision
+        # Log a generic decision - use correct API
         logger.log_decision(
             decision_type="test_decision",
-            decision_data={
+            decision="approved",
+            inputs={
                 'test_field': 'test_value',
-                'numeric_field': 123,
+                'numeric_field': 123
+            },
+            outputs={
+                'result': 'success',
                 'boolean_field': True
             },
-            order_id="TEST-ORDER-003",
-            policy_version="1.0",
             actor_id="test-actor",
-            session_id="test-session"
+            session_id="test-session",
+            policy_version="1.0"
         )
         
         print("✓ Generic decision logged successfully")
@@ -147,16 +154,17 @@ def test_disabled_logging():
         os.environ['ENABLE_DECISION_LOGGING'] = 'false'
         
         # Create new logger instance
-        logger = DecisionLogger()
+        logger = DecisionLogger(log_to_dynamodb=False, log_to_cloudwatch=False, log_to_s3=False)
         
-        if not logger.enabled:
+        if not logger.log_to_cloudwatch and not logger.log_to_dynamodb and not logger.log_to_s3:
             print("✓ Logging disabled successfully")
             
             # Try to log (should not raise error)
             logger.log_decision(
                 decision_type="test",
-                decision_data={'test': 'value'},
-                order_id="TEST-ORDER-004"
+                decision="approved",
+                inputs={'test': 'value'},
+                outputs={'result': 'success'}
             )
             print("✓ Logging call with disabled logger succeeded (no-op)")
             

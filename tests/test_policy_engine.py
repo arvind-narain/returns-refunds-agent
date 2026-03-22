@@ -24,9 +24,9 @@ def test_policy_loading():
         
         print(f"✓ Policy loaded successfully")
         print(f"  Policy Name: {info['policy_name']}")
-        print(f"  Version: {info['policy_version']}")
+        print(f"  Version: {info['version']}")
         print(f"  Effective Date: {info['effective_date']}")
-        print(f"  Source: {info['policy_file']}")
+        print(f"  Source: {policy.policy_file}")
         return True
     except Exception as e:
         print(f"✗ Failed to load policy: {e}")

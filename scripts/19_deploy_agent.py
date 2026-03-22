@@ -79,7 +79,7 @@ auth_config = {
 }
 
 runtime.configure(
-    entrypoint="17_runtime_agent.py",
+    entrypoint="src/agents/17_runtime_agent.py",
     agent_name="returns_refunds_agent",
     execution_role=config_files['role']["role_arn"],
     auto_create_ecr=True,
@@ -102,7 +102,13 @@ env_vars = {
     "COGNITO_CLIENT_ID": config_files['cognito']["client_id"],
     "COGNITO_CLIENT_SECRET": config_files['cognito']["client_secret"],
     "COGNITO_DISCOVERY_URL": config_files['cognito']["discovery_url"],
-    "OAUTH_SCOPES": " ".join(config_files['cognito'].get("scopes", ["gateway-api/read", "gateway-api/write"]))
+    "OAUTH_SCOPES": " ".join(config_files['cognito'].get("scopes", ["gateway-api/read", "gateway-api/write"])),
+    # Policy Engine configuration
+    "POLICY_FILE": "policies/default_policy.yaml",
+    # Decision Logging configuration
+    "ENABLE_DECISION_LOGGING": "true",
+    "DECISION_LOG_TABLE": "returns-decision-log",
+    "AWS_REGION": "us-west-2"
 }
 
 print("   Environment variables:")
@@ -143,7 +149,7 @@ try:
         "memory_id": config_files['memory']["memory_id"],
         "gateway_url": config_files['gateway']["gateway_url"],
         "knowledge_base_id": config_files['kb']["knowledge_base_id"],
-        "entrypoint": "17_runtime_agent.py"
+        "entrypoint": "src/agents/17_runtime_agent.py"
     }
     
     with open('runtime_config.json', 'w') as f:
@@ -158,7 +164,7 @@ try:
     print(f"\nAgent ARN: {agent_arn}")
     print(f"Agent Name: returns_refunds_agent")
     print(f"Region: us-west-2")
-    print(f"Entrypoint: 17_runtime_agent.py")
+    print(f"Entrypoint: src/agents/17_runtime_agent.py")
     
     print("\n" + "=" * 80)
     print("NEXT STEPS")
